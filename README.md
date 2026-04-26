@@ -64,7 +64,18 @@ Yale's [Bouchet HPC](https://docs.ycrc.yale.edu/clusters/bouchet/) cluster (Slur
 
 ## Status
 
-Project is in active development. Phases 1 (inventory) and 2 (paper notes) complete; Phase 3 (audit of prior code) in progress.
+Phases 1–5 complete. The clean baseline package and the entropy-filtered modification both pass their smoke gates on CPU. Cluster runs have not yet been scheduled.
+
+| Phase | Deliverable | Status |
+|---|---|---|
+| 1 | `phase1_inventory.md` | done |
+| 2 | `paper_notes.md` (source of truth) | done |
+| 3 | `code_audit.md` | done |
+| 4 | `baseline/` package + 23 unit tests + L&O-NAE-SAT smoke (3.7 s on CPU) | done |
+| 5 | `entropy_filtered/` package + 15 filter tests + filtered smoke (2.6 s on CPU) | done |
+| 6 | Awaiting Bouchet review by user | pending |
+| 7 | Slurm scripts → user-approved sbatch | pending |
+| 8 | `findings.md` | pending |
 
 ## References
 
