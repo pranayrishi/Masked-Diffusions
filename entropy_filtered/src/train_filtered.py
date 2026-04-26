@@ -300,12 +300,46 @@ def run_filtered_training(cfg: FilteredTrainConfig, *, resume_from: str | None =
     print(f"[filtered] done in {elapsed:.1f}s ({cfg.num_iterations} iterations)")
 
 
+def _smart_cast(v: str):
+    """Best-effort cast for CLI overrides: int → float → bool → str.
+
+    Identical to baseline.src.train._smart_cast — duplicated rather than imported
+    so this module's CLI works regardless of import path.
+    """
+    try:
+        return int(v)
+    except ValueError:
+        pass
+    try:
+        return float(v)
+    except ValueError:
+        pass
+    if v.lower() in {"true", "false"}:
+        return v.lower() == "true"
+    return v
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Entropy-filtered MDM training.")
-    parser.add_argument("--config", required=True)
-    parser.add_argument("--resume", default=None)
+    parser.add_argument("--config", required=True, help="Path to a YAML config file.")
+    parser.add_argument("--resume", default=None, help="Optional checkpoint to resume from.")
+    parser.add_argument("--override", action="append", default=[],
+                        help="Repeatable 'key=value' override (e.g., num_iterations=250 or "
+                             "entropy_filter.warmup_steps=50). One level of nesting via dot "
+                             "notation is supported.")
     args = parser.parse_args()
+
     cfg_dict = load_config(args.config)
+    for kv in args.override:
+        if "=" not in kv:
+            raise SystemExit(f"--override expects key=value, got {kv!r}")
+        k, v = kv.split("=", 1)
+        if "." in k:
+            head, tail = k.split(".", 1)
+            cfg_dict[head][tail] = _smart_cast(v)
+        else:
+            cfg_dict[k] = _smart_cast(v)
+
     cfg = _to_filtered_config(cfg_dict)
     run_filtered_training(cfg, resume_from=args.resume)
     return 0
