@@ -183,6 +183,75 @@ Plus a static check (e.g., `grep -nE '/Users/|/home/'` over `**/*.sh`) to surfac
 
 ---
 
+## Q10. Early convergence on (N=25, P=275) — iteration budget likely over-provisioned — **EMPIRICAL OBSERVATION 2026-04-26**
+
+**Question.** Smoke job 9537158 (250 steps, batch=128, lr=1e-3, 14M params, H200) on the easiest config `(N=25, P=275)` reached its loss plateau by **step ~110** (loss dropped from 1.52 → 0.57 and stayed in [0.566, 0.591] for the remaining 14 logged checkpoints). The paper's iteration budget — and our derived `train_iterations: 50000` in the production configs — is **3–5× larger than what the easiest config actually needs**. Whether the harder configs `(30, 270)`, `(40, 260)`, `(50, 250)`, `(100, 200)` show similar early convergence is **open**.
+
+**Why it matters.**
+
+- Walltime sizing for the 75-job Bouchet array follows directly from this. If every config converges by step ~5–10K, a single conservative `--time` directive can be much shorter, lowering queue priority cost and tightening the cycle time.
+- More importantly: if the model converges before the filter has time to reshape what it sees, the entropy filter's effect is bounded by the warmup window and never gets a chance to differentiate variants. The filter dropping 75% of post-warmup samples on (25, 275) does not appear to hurt — but it also doesn't appear to *help* a model that has already converged. Whether 50K iterations is the right horizon to test the filter's effect, or whether we should specifically pick an iteration count where the model is still mid-trajectory at filter-activation time, is a paper-relevant design question.
+- The paper's reported 19M-MDM Table 1 numbers are at 5×10⁴ iterations. If our 14M-MDM converges at ~10² iterations on the easiest config, our reproduction baseline is *not* iteration-bound — it's data/regularization-bound. Reproducing the paper's numbers may or may not require running the full 50K.
+
+**Status.** **Open / empirical observation**, gated on professor's iteration-count decision.
+
+**Resolution path.**
+
+1. Decide with professor whether the production array uses 50K (conservative, paper-matching) or a smaller number (e.g., 5–10K, sized to where the loss plateau begins on the hardest config).
+2. If the chosen budget is < 50K, document the deviation from the paper's stated training horizon as a `findings.md` entry, with the smoke trajectory as evidence.
+3. Optionally — and only if the professor agrees the calibration cost is justified — run a one-task per-config smoke (5 single tasks, ~5 min each, total cost ≪ one full production task) measuring the per-config plateau step before locking in walltime.
+
+---
+
+## Q11. Filter-dynamics gap between logged checkpoints — **EMPIRICAL OBSERVATION 2026-04-26**
+
+**Question.** In smoke job 9537158, the entropy filter exhibits a sharp regime shift between logged steps 100 and 110:
+
+- Steps 60–90 (4 logged checkpoints): `filter_n_kept = 0`, `skipped_optim_step = 1` — i.e., the optimizer received zero gradient signal.
+- Step 100: `filter_n_kept = 1` (1/128 = 0.78% of batch), one tiny update.
+- Step 110: `filter_n_kept = 128` (100% of batch), all subsequent steps fully accepted.
+
+`filter_H_mean` correspondingly crashed from **0.673 (step 100)** to **0.582 (step 110)** — well below `H_high = 0.65` — despite the optimizer having had essentially no signal in the preceding 50 logged steps. Wall-time analysis shows the gap is real (step 90→100 took 0.74 s for 10 iterations, consistent with "no backward"; step 100→110 took 2.55 s for 10 iterations, consistent with "all updating") — so somewhere in the 9 unlogged optimizer steps between 100 and 110, the model crossed the threshold. **What actually happened in those 9 unlogged steps is invisible at the current logging cadence.**
+
+**Why it matters.**
+
+- The regime-shift mechanism is the load-bearing claim of the filter ablation. If we cannot characterize how a near-zero-gradient model crosses a sharp entropy threshold, the paper's interpretation of the filter's role becomes vulnerable to "the filter doesn't really do anything; the model crosses the threshold via momentum/dropout noise/random init drift."
+- Whether this crossing is mostly *threshold-bound* (filter at H_high=0.65 happens to sit on top of the model's natural early-training transient) or *filter-driven* (filter actually defers training in a way that changes the post-transient endpoint) cannot be answered from the current logs.
+- The threshold sweep (Q12 below) will partially test this: if all sweep settings produce a similar regime shift at the same iteration count regardless of `H_high`, that's evidence the model's natural trajectory dominates and the filter is epiphenomenal. If the regime shift moves with `H_high`, the filter is doing real work.
+
+**Status.** **Open / not a blocker.** The threshold sweep itself is the experimental answer; per-step logging adds resolution but does not gate the decision to run the array.
+
+**Resolution path.**
+
+1. For the production array's first calibration run (or for a single task added to the array with this purpose), set `metrics_log_interval: 1` (every step). After the run, inspect the 90→110 window at full resolution to characterize the crossing trajectory.
+2. If nothing notable surfaces (the crossing is monotonic and uneventful at full resolution), revert to the 10-step cadence for the remaining tasks to keep `metrics.jsonl` small.
+3. Cross-reference per-step `filter_H_mean` against `loss` and `grad_norm`: a healthy regime shift should show grad_norm increasing as the filter starts accepting more samples; a suspicious one would show grad_norm staying near zero across the crossing.
+
+---
+
+## Q12. Bimodality of `filter_H_mean` is temporal, not within-batch — **EMPIRICAL OBSERVATION 2026-04-26**
+
+**Question.** Smoke job 9537158's entropy distribution shows a clear two-cluster structure: cluster A at H ≈ 0.67 (steps 60–100, filter dropping) and cluster B at H ≈ 0.55–0.60 (steps 110–250, filter keeping). **The two clusters are *not* coexisting modes within a single batch's H distribution — they are sequential regimes along the training trajectory.** Within any single logged step, `filter_H_max - filter_H_min ≈ 0.05` (tightly clustered).
+
+**Why it matters.**
+
+- This reframes the filter's role. At `H_high = 0.65`, the filter is **not** acting as a per-sample triage tool that separates "easy" from "hard" subproblems within each batch (that interpretation requires within-batch bimodality, which is absent). Instead, it is acting as a **regime-shift gate**: it defers the optimizer entirely while the model is in its post-warmup transient (H ≈ 0.67, just above threshold), then resumes optimization once the model has crossed into its converged regime (H ≈ 0.57, just below threshold). The threshold sits between two trajectory regimes, not between two within-batch populations.
+- This has direct implications for the threshold sweep. A sweep over `H_high ∈ {0.55, 0.60, 0.65, 0.70}` is testing four different gating-points along the same trajectory:
+  - `H_high = 0.55`: threshold sits *inside* the converged cluster (cluster B). The filter would do *continuous within-batch filtering* — dropping the noisier samples within each post-convergence batch. This is the "as advertised" mode of the entropy filter.
+  - `H_high = 0.65`: threshold sits *between* clusters. Filter behaves as a regime-shift gate (current behavior).
+  - `H_high = 0.70` or higher: threshold sits *above* the early transient. Filter never fires; behaves as control.
+- So the sweep is not just a threshold-sensitivity test — it is **testing three qualitatively different filter behaviors with one knob**. The paper writeup should distinguish these three regimes rather than treating the sweep as a continuous gradient.
+
+**Status.** **Open / observation gating threshold-sweep design.** Pending professor's response on the sweep range.
+
+**Resolution path.**
+
+1. Confirm with professor that the chosen sweep range covers all three qualitative regimes (`< 0.60`, `≈ 0.65`, `> 0.70`). If the range is narrowed to e.g. `{0.55, 0.60, 0.65, 0.70}`, the writeup should explicitly call out which threshold lands in which regime.
+2. After the production array completes, plot `filter_H_mean` trajectory and `filter_n_kept` rate per (variant, threshold) over training iterations. Annotate the regime each `H_high` corresponds to. This becomes the diagnostic figure for the filter-mechanism section.
+3. Long-term: if the gate-vs-continuous-filter distinction holds across configs, this is a stronger story than the original "filter drops easy/hard subproblems" framing — it means the filter is implicitly selecting *when the optimizer trains* rather than *which examples it trains on*.
+
+---
+
 ## Adding to this file
 
 When a new methodological ambiguity is discovered, add an entry with the same five fields. Linkable from the paper draft and from the project README so the professor can audit the open questions before submission.

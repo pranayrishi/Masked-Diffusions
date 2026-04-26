@@ -110,9 +110,24 @@ def mdm_loss(
     Loss per sample b:   (1 / n_b) × Σ_{i ∈ M_b} −log p_θ(x_0^{i,b} | x^b)
     Final loss:          mean over batch.
     """
+    per_sample = per_sample_mdm_loss(logits, x0, mask)
+    n_masked = mask.sum(dim=-1)
+    loss = per_sample.mean()
+    return MdmLossOutput(loss=loss, n_masked_per_sample=n_masked, n_masked_total=int(n_masked.sum().item()))
+
+
+def per_sample_mdm_loss(
+    logits: torch.Tensor,         # (B, L, V)
+    x0: torch.Tensor,             # (B, L)
+    mask: torch.Tensor,           # (B, L) bool — True at masked positions
+) -> torch.Tensor:
+    """Per-sample MDM loss (1/n weighted), returned as a (B,) tensor.
+
+    Same formula as `mdm_loss` but without the batch mean. Used by the entropy
+    filter's mechanism diagnostic to compute mean loss separately on kept vs.
+    dropped samples — see entropy_filtered.src.train_filtered.
+    """
     B, L, V = logits.shape
-    # Per-token cross-entropy at every position (the reduction='none' form).
-    # We zero out non-masked positions before per-sample summation.
     ce = F.cross_entropy(
         logits.reshape(-1, V),
         x0.reshape(-1),
@@ -120,15 +135,11 @@ def mdm_loss(
     ).reshape(B, L)
     ce = ce * mask.float()
 
-    n_masked = mask.sum(dim=-1)                           # (B,)
-    # Avoid division by zero for any sample with n=0 (shouldn't happen with n≥1 sampling
-    # but guard anyway). For samples with n=0, contribute zero to the loss.
+    n_masked = mask.sum(dim=-1)
     safe_n = n_masked.clamp(min=1).float()
-    per_sample = ce.sum(dim=-1) / safe_n                  # (B,)
+    per_sample = ce.sum(dim=-1) / safe_n
     per_sample = per_sample * (n_masked > 0).float()
-
-    loss = per_sample.mean()
-    return MdmLossOutput(loss=loss, n_masked_per_sample=n_masked, n_masked_total=int(n_masked.sum().item()))
+    return per_sample
 
 
 # ---------------------------------------------------------------------------

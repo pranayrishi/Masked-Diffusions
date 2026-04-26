@@ -25,9 +25,9 @@
 #SBATCH --account=${ACCOUNT}
 #SBATCH --partition=${PARTITION_PRODUCTION}
 #SBATCH --gpus=${GPU_TYPE}:1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=48G
-#SBATCH --time=${PRODUCTION_WALLTIME}                 # set from smoke measurement
+#SBATCH --cpus-per-task=2                             # smoke 9537158 measured 24% utilization on 4 CPUs
+#SBATCH --mem=8G                                      # smoke 9537158 used 1.2G RSS; 8G is comfortable headroom
+#SBATCH --time=${PRODUCTION_WALLTIME}                 # set from smoke measurement (245ms/step × 50K = 3h24m, 1.5× buffer)
 #SBATCH --array=0-74%${ARRAY_CONCURRENCY}             # 75 tasks; cap from sacctmgr
 #SBATCH --output=${PROJECT_DIR}/logs/%x-%A_%a.out
 #SBATCH --error=${PROJECT_DIR}/logs/%x-%A_%a.err

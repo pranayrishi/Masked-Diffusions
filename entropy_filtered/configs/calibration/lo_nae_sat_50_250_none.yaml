@@ -1,0 +1,61 @@
+# Calibration run: variant=none on (N, P) = (50, 250). See 25_275 sibling for methodology.
+
+task: lo_nae_sat
+
+data:
+  N: 50
+  P: 250
+  m: 2
+  pad_to: 512
+  pad_value: 2
+  mask_token_id: 3
+  vocab_size: 4
+  seed: 42
+
+model:
+  hidden: 384
+  n_layers: 8
+  n_heads: 6
+  ff: 1536
+  causal: false
+  pos_type: rope
+  dropout: 0.0
+  weight_tie: false
+  vocab_size: 4
+
+seed: 0
+num_iterations: 50000
+batch_size: 128
+lr: 1.0e-3
+weight_decay: 0.1
+beta1: 0.9
+beta2: 0.95
+grad_clip: 1.0
+eta_min_ratio: 0.1
+log_every: 100
+ckpt_every: 5000
+
+entropy_filter:
+  mode: none
+  warmup_steps: 500
+  reduction: mean
+  H_low: 0.0
+  H_high: 1000000.0
+  pct_low: 0.25
+  pct_high: 0.75
+  use_softmax_excluding_mask_token: true
+  eps: 1.0e-12
+
+# See lo_nae_sat_25_275_none.yaml for early-stop methodology notes.
+early_stop:
+  enabled: true
+  criterion: rolling_mean_relative
+  tolerance: 0.005
+  window: 500
+  check_every: 500
+  min_step: 1000
+
+train_size: 100000
+train_sample_seed: 123
+
+output_dir: calibration_runs/lo_nae_sat_50_250_none

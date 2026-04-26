@@ -43,12 +43,34 @@ def save_config(cfg: dict, path: str) -> None:
 # ---------------------------------------------------------------------------
 
 def set_global_seed(seed: int) -> None:
-    """Seed numpy, python random, and torch (CPU + CUDA)."""
+    """Seed numpy, python random, and torch (CPU + CUDA), AND enable deterministic
+    algorithms.
+
+    Determinism flags set here:
+      - torch.backends.cudnn.deterministic = True
+      - torch.backends.cudnn.benchmark = False  (auto-tuner picks fastest, not bit-stable)
+      - torch.use_deterministic_algorithms(True, warn_only=True)
+      - PYTHONHASHSEED env var (str-keyed dict ordering)
+      - CUBLAS_WORKSPACE_CONFIG=':4096:8' (required by deterministic cuBLAS on CUDA;
+        harmless on CPU). Set with `setdefault` so an explicit shell-level override wins.
+
+    `warn_only=True` so a stray non-deterministic op surfaces as a UserWarning rather
+    than aborting training. Promote to warn_only=False once the production code path
+    is fully audited; for now, warnings are visible in the Slurm `.err` and act as
+    an early-warning signal.
+    """
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    torch.use_deterministic_algorithms(True, warn_only=True)
 
 
 # ---------------------------------------------------------------------------

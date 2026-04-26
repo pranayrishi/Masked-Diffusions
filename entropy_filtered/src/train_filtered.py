@@ -21,7 +21,8 @@ from __future__ import annotations
 import argparse
 import sys
 import time
-from dataclasses import dataclass
+import warnings
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -34,7 +35,7 @@ REPO = THIS.parent.parent.parent          # parent-of-entropy_filtered → repo 
 sys.path.insert(0, str(REPO))
 
 from baseline.src.data import LoNaeSatConfig, generate_dataset            # noqa: E402
-from baseline.src.diffusion import apply_mask, mdm_loss, sample_mask_counts  # noqa: E402
+from baseline.src.diffusion import apply_mask, mdm_loss, per_sample_mdm_loss, sample_mask_counts  # noqa: E402
 from baseline.src.model import Transformer, TransformerConfig             # noqa: E402
 from baseline.src.utils import (                                          # noqa: E402
     batch_indices_for_step,
@@ -76,6 +77,69 @@ class FilteredTrainConfig:
     # data sampling
     train_size: int
     train_sample_seed: int
+    # early stopping (calibration runs use this; production runs leave disabled)
+    early_stop: dict = field(default_factory=dict)
+
+
+@dataclass
+class EarlyStopConfig:
+    """Plateau-based early stopping for calibration runs.
+
+    Criterion (single supported flavor — `rolling_mean_relative`):
+        rolling_mean(loss[step-window+1 .. step])
+            vs. rolling_mean(loss[step-2*window+1 .. step-window])
+        plateau iff |last - prev| / max(prev, eps) < tolerance
+
+    Checks every `check_every` training steps starting at `min_step`. The check
+    excludes steps where the optimizer was skipped (filter dropped the entire
+    batch) — those steps had no gradient update so their "loss=0" is meaningless.
+    """
+    enabled: bool = False
+    criterion: str = "rolling_mean_relative"
+    tolerance: float = 0.005       # 0.5% relative
+    window: int = 500              # in TRAINING steps (not logged steps)
+    check_every: int = 500
+    min_step: int = 1000
+
+
+def _is_plateau(losses_by_step: dict[int, float], step: int, cfg: EarlyStopConfig) -> bool:
+    """Return True iff the rolling-mean relative criterion fires at this step."""
+    if not cfg.enabled:
+        return False
+    if cfg.criterion != "rolling_mean_relative":
+        raise ValueError(f"unsupported criterion: {cfg.criterion}")
+    if step < cfg.min_step:
+        return False
+    if step % cfg.check_every != 0:
+        return False
+    W = cfg.window
+    last = [losses_by_step[s] for s in range(step - W + 1, step + 1) if s in losses_by_step]
+    prev = [losses_by_step[s] for s in range(step - 2 * W + 1, step - W + 1) if s in losses_by_step]
+    # Need at least half-coverage in each window to call it valid (skipped-optim
+    # steps drop out, so we tolerate some sparsity).
+    if len(last) < W // 2 or len(prev) < W // 2:
+        return False
+    last_mean = sum(last) / len(last)
+    prev_mean = sum(prev) / len(prev)
+    if prev_mean <= 0:
+        return False
+    rel = abs(last_mean - prev_mean) / prev_mean
+    return rel < cfg.tolerance
+
+
+def _setup_warnings_log(output_dir: str) -> None:
+    """Append all UserWarnings (incl. torch.use_deterministic_algorithms warnings) to
+    `output_dir/warnings.log`. Always-on for filtered training; the log is harmless
+    when empty and provides the audit trail for eventually flipping
+    `warn_only=True` → `warn_only=False`."""
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    fh = open(f"{output_dir}/warnings.log", "a", buffering=1)
+
+    def _show(message, category, filename, lineno, *_args, **_kwargs):
+        fh.write(f"{filename}:{lineno}: {category.__name__}: {message}\n")
+
+    warnings.simplefilter("default")  # show each warning once per (filename, lineno)
+    warnings.showwarning = _show
 
 
 def _to_filtered_config(d: dict) -> FilteredTrainConfig:
@@ -98,6 +162,7 @@ def _to_filtered_config(d: dict) -> FilteredTrainConfig:
         output_dir=str(d["output_dir"]),
         train_size=int(d.get("train_size", 100_000)),
         train_sample_seed=int(d.get("train_sample_seed", 123)),
+        early_stop=d.get("early_stop", {}),
     )
 
 
@@ -162,6 +227,24 @@ def filtered_train_step(
         mask_token_id=mask_token_id, step=step,
     )
 
+    # Mechanism diagnostic: compute per-sample MDM loss on ALL samples under no-grad
+    # using the same scoring forward pass, then split by keep/drop. This gives the
+    # apples-to-apples "is the filter targeting harder subproblems?" measurement.
+    # Both subsets are evaluated with the SAME model state (the scoring pass), so any
+    # difference in mean loss reflects the filter's selection, not parameter updates.
+    with torch.no_grad():
+        per_sample_losses = per_sample_mdm_loss(scoring_logits, x0, mask)  # (B,)
+    keep_bool = decision.keep
+    drop_bool = ~keep_bool
+    if keep_bool.any():
+        filter_loss_kept_mean = float(per_sample_losses[keep_bool].mean().cpu().item())
+    else:
+        filter_loss_kept_mean = None
+    if drop_bool.any():
+        filter_loss_dropped_mean = float(per_sample_losses[drop_bool].mean().cpu().item())
+    else:
+        filter_loss_dropped_mean = None
+
     # Step 2: discard dropped samples and run the loss-bearing forward pass
     keep_idx = decision.keep.nonzero(as_tuple=True)[0]
     if keep_idx.numel() == 0:
@@ -178,6 +261,8 @@ def filtered_train_step(
             "filter_H_min": decision.H_min,
             "filter_H_max": decision.H_max,
             "filter_H_mean": decision.H_mean,
+            "filter_loss_kept_mean": filter_loss_kept_mean,
+            "filter_loss_dropped_mean": filter_loss_dropped_mean,
             "skipped_optim_step": 1,
         }
 
@@ -204,6 +289,8 @@ def filtered_train_step(
         "filter_H_min": decision.H_min,
         "filter_H_max": decision.H_max,
         "filter_H_mean": decision.H_mean,
+        "filter_loss_kept_mean": filter_loss_kept_mean,
+        "filter_loss_dropped_mean": filter_loss_dropped_mean,
         "skipped_optim_step": 0,
     }
 
@@ -225,7 +312,21 @@ def run_filtered_training(cfg: FilteredTrainConfig, *, resume_from: str | None =
     # Build entropy-filter config
     fcfg = EntropyFilterConfig(**cfg.entropy_filter) if cfg.entropy_filter else EntropyFilterConfig()
     fcfg.validate()
+
+    # Build early-stop config (no-op when not provided)
+    es_cfg = EarlyStopConfig(**cfg.early_stop) if cfg.early_stop else EarlyStopConfig()
+
+    # Capture warnings (incl. non-deterministic-op UserWarnings from torch) to a
+    # per-run log next to metrics.jsonl. Used during calibration to audit which
+    # ops would abort under warn_only=False.
+    Path(cfg.output_dir).mkdir(parents=True, exist_ok=True)
+    _setup_warnings_log(cfg.output_dir)
+
     print(f"[filtered] device={device}, mode={fcfg.mode}, warmup={fcfg.warmup_steps}, output_dir={cfg.output_dir}")
+    if es_cfg.enabled:
+        print(f"[filtered] early-stop ENABLED: criterion={es_cfg.criterion} "
+              f"tolerance={es_cfg.tolerance} window={es_cfg.window} "
+              f"check_every={es_cfg.check_every} min_step={es_cfg.min_step}")
 
     if cfg.task == "lo_nae_sat":
         train, data_cfg_obj = _build_loaders_lo_nae_sat(cfg)
@@ -264,6 +365,12 @@ def run_filtered_training(cfg: FilteredTrainConfig, *, resume_from: str | None =
     train_size = train.shape[0]
     t0 = time.monotonic()
 
+    # Per-step loss history for plateau detection. Skipped-optim steps are excluded
+    # (loss=0 there is not a real loss). Keep an in-memory dict; ~50K floats × 8B = 400KB.
+    losses_by_step: dict[int, float] = {}
+    final_step = cfg.num_iterations
+    early_stopped = False
+
     for step in range(start_step + 1, cfg.num_iterations + 1):
         idx = batch_indices_for_step(cfg.seed, step, train_size, cfg.batch_size)
         batch = torch.as_tensor(train[idx], dtype=torch.long, device=device)
@@ -274,6 +381,9 @@ def run_filtered_training(cfg: FilteredTrainConfig, *, resume_from: str | None =
             grad_clip=cfg.grad_clip, filter_cfg=fcfg, step=step,
         )
         scheduler.step()
+
+        if metrics.get("skipped_optim_step", 0) == 0:
+            losses_by_step[step] = float(metrics["loss"])
 
         if step % cfg.log_every == 0 or step == 1:
             lr_now = scheduler.get_last_lr()[0]
@@ -295,9 +405,42 @@ def run_filtered_training(cfg: FilteredTrainConfig, *, resume_from: str | None =
             )
             save_checkpoint(ckpt, f"{cfg.output_dir}/ckpt_step{step}.pt")
 
+        if _is_plateau(losses_by_step, step, es_cfg):
+            print(f"[filtered] plateau detected at step {step} "
+                  f"(rolling {es_cfg.window}-step mean within {es_cfg.tolerance:.3%} relative); "
+                  f"stopping early")
+            # Save a final checkpoint at the plateau step (idempotent if already saved).
+            if step % cfg.ckpt_every != 0:
+                rng_states = capture_rng_states()
+                ckpt = CheckpointState(
+                    step=step, seed=cfg.seed,
+                    model_state=model.state_dict(),
+                    optimizer_state=optimizer.state_dict(),
+                    scheduler_state=scheduler.state_dict(),
+                    rng_state_torch=rng_states["rng_state_torch"],
+                    rng_state_cuda=rng_states["rng_state_cuda"],
+                    rng_state_numpy=rng_states["rng_state_numpy"],
+                    rng_state_python=rng_states["rng_state_python"],
+                    extra={"task": cfg.task, "n_params": n_params,
+                           "filter_mode": fcfg.mode, "early_stopped": True},
+                )
+                save_checkpoint(ckpt, f"{cfg.output_dir}/ckpt_step{step}.pt")
+            final_step = step
+            early_stopped = True
+            break
+
     logger.close()
+
+    # Always emit plateau_step.txt — single integer, no other characters. The value is
+    # the step at which training STOPPED, which is either the detected plateau step
+    # (if early_stopped) or the configured cap (if no plateau was detected).
+    plateau_path = Path(cfg.output_dir) / "plateau_step.txt"
+    plateau_path.write_text(str(final_step))
+
     elapsed = time.monotonic() - t0
-    print(f"[filtered] done in {elapsed:.1f}s ({cfg.num_iterations} iterations)")
+    status = "EARLY-STOPPED at plateau" if early_stopped else "completed full budget"
+    print(f"[filtered] done in {elapsed:.1f}s ({final_step} iterations, {status})")
+    print(f"[filtered] plateau_step.txt={final_step}")
 
 
 def _smart_cast(v: str):
