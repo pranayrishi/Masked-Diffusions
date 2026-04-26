@@ -169,6 +169,6 @@ if [[ ! -f "${EVAL_FILE}" ]]; then
     echo "[phase_e ${IDX}] FAIL: ${EVAL_FILE} does not exist"
     exit 2
 fi
-python3 -c "import json; d=json.load(open('${EVAL_FILE}')); assert d['results']; print(f'[phase_e ${IDX}] eval ok: ' + ', '.join(f\"{r[\\\"strategy\\\"]}={r[\\\"obs_accuracy\\\"]:.4%}\" for r in d['results']))"
+python3 -c "import json; d=json.load(open('${EVAL_FILE}')); assert d['results']; pairs=['{}={:.4%}'.format(r['strategy'], r['obs_accuracy']) for r in d['results']]; print('[phase_e ${IDX}] eval ok: ' + ', '.join(pairs))"
 
 echo "[phase_e ${IDX}] DONE. Results: ${PROJECT_RESULTS}"

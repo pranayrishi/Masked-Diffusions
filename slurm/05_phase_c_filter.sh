@@ -120,6 +120,6 @@ for f in "${EVAL_FILE}" "${TRACE_FILE}"; do
         exit 2
     fi
 done
-python3 -c "import json; d=json.load(open('${EVAL_FILE}')); assert d['results']; print(f'[task ${IDX}] eval ok: ' + ', '.join(f\"{r[\\\"strategy\\\"]}={r[\\\"obs_accuracy\\\"]:.4%}\" for r in d['results']))"
+python3 -c "import json; d=json.load(open('${EVAL_FILE}')); assert d['results']; pairs=['{}={:.4%}'.format(r['strategy'], r['obs_accuracy']) for r in d['results']]; print('[task ${IDX}] eval ok: ' + ', '.join(pairs))"
 
 echo "[task ${IDX}] DONE. Results: ${PROJECT_RESULTS}"
