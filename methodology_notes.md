@@ -149,6 +149,40 @@ The reason: at 30 post-warmup steps the 19M model still places near-uniform mass
 
 ---
 
+## Q9. Bash entry-point scripts have no portability test coverage — **GAP IDENTIFIED 2026-04-26**
+
+**Question.** Our test suite (52 unit tests) verifies the Python pipeline thoroughly, but the bash entry-point scripts (`baseline/scripts/smoke_test.sh`, `entropy_filtered/scripts/smoke_test.sh`, `slurm/01_smoke.sh`, etc.) are not exercised by pytest at all. They run on the developer's laptop (and now Bouchet) but their portability — particularly default paths, env-var fallbacks, and shell-builtin assumptions — is not asserted anywhere.
+
+**Why it matters.** This is exactly the gap that bit us on the first Bouchet smoke run (job 9537131): `baseline/scripts/smoke_test.sh` had
+
+```bash
+PYTHON="${PYTHON:-/Users/rishinalem/anaconda3/bin/python3}"
+```
+
+— a default that is correct on my laptop but doesn't exist on any other machine. The medium smoke (`scripts/medium_smoke.py`) bypasses the bash wrapper entirely and so could not have caught it. The unit tests bypass it too. The first time this script ran on a non-laptop was inside an `sbatch`-allocated GPU job, where the cost of finding the bug is roughly 5× the cost of any laptop test (sbatch overhead, queue wait, GPU-time charge).
+
+**Status.** **Open / coverage-gap finding** (not blocking the current Bouchet run).
+
+**Resolution path.** Add `tests/test_bash_scripts.py` (or a new `tests/test_portability.py`) that runs each top-level shell entry point from a **clean shell** (i.e., `env -i` plus a minimal `PATH`) and verifies it either succeeds or fails for an *expected* reason (missing dependency, missing data file). Specifically:
+
+```python
+# Sketch — actual implementation should use subprocess.run with check_returncode
+def test_baseline_smoke_test_sh_runs_with_python3_on_path(tmp_path):
+    # env -i wipes inherited env so we can't accidentally rely on a developer-local var
+    result = subprocess.run(
+        ["env", "-i", "PATH=/usr/bin:/bin", "PYTHON=python3",
+         "bash", "baseline/scripts/smoke_test.sh"],
+        capture_output=True, text=True, timeout=600,
+    )
+    assert result.returncode == 0, f"smoke_test.sh failed under clean env:\n{result.stderr}"
+```
+
+Plus a static check (e.g., `grep -nE '/Users/|/home/'` over `**/*.sh`) to surface any future hardcoded developer paths before they hit the cluster.
+
+**Implementation cost:** ~30 min to write, ~10 min per CI run. Worth doing once the post-smoke threshold review concludes; not in the critical path for v1 paper results.
+
+---
+
 ## Adding to this file
 
 When a new methodological ambiguity is discovered, add an entry with the same five fields. Linkable from the paper draft and from the project README so the professor can audit the open questions before submission.
