@@ -31,22 +31,22 @@ from src.data import (
 
 EXPECTED_TRIPLES_SEED42_5_10 = np.array(
     [
-        [3, 4, 2],
-        [4, 4, 1],
-        [2, 2, 2],
-        [4, 3, 2],
-        [4, 1, 3],
-        [1, 3, 4],
+        [1, 4, 2],
+        [3, 1, 2],
+        [1, 0, 3],
+        [0, 1, 2],
+        [0, 2, 3],
+        [4, 2, 0],
+        [2, 0, 4],
+        [1, 2, 4],
         [0, 3, 1],
-        [4, 3, 0],
-        [0, 2, 2],
-        [1, 3, 3],
+        [0, 1, 2],
     ],
     dtype=np.int64,
 )
 
 EXPECTED_SEQUENCE_FOR_LATENTS_12121 = np.array(
-    [1, 2, 1, 2, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 0],
+    [1, 2, 1, 2, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1],
     dtype=np.int64,
 )
 
@@ -87,73 +87,26 @@ def test_naive_accuracy_75_percent_for_m2():
 # Test 3: empirical observation distribution on a 1000-sample dataset
 # ---------------------------------------------------------------------------
 
-def _expected_p_nae1_given_triples(triples: np.ndarray, m: int) -> float:
-    """Analytical E[P(NAE=1)] over uniform iid latents, marginalizing over the FIXED triples.
+def test_seed42_triples_have_three_distinct_indices():
+    """Without-replacement per triple: every triple's three indices are distinct."""
+    triples = make_triples(N=20, P=280, seed=42)
+    for j, t in enumerate(triples):
+        assert len(set(t.tolist())) == 3, f"triple j={j} has duplicate indices: {t.tolist()}"
 
-    For a triple (i, j, k):
-      - all three indices equal: P(NAE=1) = 0
-      - exactly two indices equal: P(NAE=1) = (m-1)/m
-      - all three indices distinct: P(NAE=1) = 1 - 1/m^2
 
-    The paper's "75 % naive accuracy" claim is the all-distinct case for m=2.
-    For finite N with with-replacement triples, the population mean is < 75 %
-    because some triples are degenerate. We assert against the *correct* mean
-    so the test is exact, not approximate.
+def test_empirical_observation_one_rate_close_to_75_percent():
+    """With without-replacement triples, the population P(NAE=1) is exactly 1 − 1/m².
+
+    For m=2 this is 0.75. We assert this with a 1000-sample × 280-observation dataset:
+    280,000 Bernoulli(0.75) draws have std ≈ 0.0008 — a 0.01 band is conservative.
     """
-    p_per_triple = []
-    for (i, j, k) in triples.tolist():
-        a, b, c = (i == j), (j == k), (i == k)
-        if a and b and c:                # all three equal
-            p_per_triple.append(0.0)
-        elif a or b or c:                # exactly two equal
-            p_per_triple.append((m - 1) / m)
-        else:                            # all distinct
-            p_per_triple.append(1 - 1 / (m * m))
-    return float(np.mean(p_per_triple))
-
-
-def test_empirical_observation_one_rate_matches_analytical_expectation():
-    """Generate 1000 sequences and compare the observation-1 frequency to the
-    *exact* analytical expectation for the seed-42 triples (not the asymptotic 75%)."""
     cfg = LoNaeSatConfig(N=20, P=280, m=2, pad_to=None, mask_token_id=3, vocab_size=4, seed=42)
-    seqs, triples = generate_dataset(cfg, num_samples=1000, sample_seed=123)
+    seqs, _ = generate_dataset(cfg, num_samples=1000, sample_seed=123)
     obs = seqs[:, cfg.N : cfg.L_data]
     empirical = float((obs == 1).mean())
-    expected = _expected_p_nae1_given_triples(triples, m=cfg.m)
-    # 1000 × 280 = 280k draws of a Bernoulli around `expected`; std ≈ 0.001. Use 0.01 band.
-    assert abs(empirical - expected) < 0.01, (
-        f"empirical {empirical:.4f} vs analytical {expected:.4f}"
+    assert abs(empirical - 0.75) < 0.01, (
+        f"empirical P(NAE=1) drifted from asymptotic 0.75: {empirical:.4f}"
     )
-
-
-def test_naive_75_percent_holds_when_triples_are_unique():
-    """The paper's 75% is exact when triples are all-distinct (no degenerates).
-
-    We construct a mini-dataset whose triples are explicitly distinct and verify the
-    population P(NAE=1) is exactly 0.75 in the limit of many samples.
-    """
-    rng = np.random.RandomState(7)
-    N, P = 20, 200
-    # Sample distinct triples (no repeated indices within a triple)
-    triples = []
-    while len(triples) < P:
-        cand = rng.choice(N, size=3, replace=False)
-        triples.append(cand)
-    triples = np.asarray(triples, dtype=np.int64)
-
-    # Generate 5000 sequences using these triples directly (bypass the seed-42 generator)
-    L = N + P
-    rng2 = np.random.RandomState(123)
-    seqs = np.empty((5000, L), dtype=np.int64)
-    for s in range(5000):
-        latents = rng2.randint(1, 3, size=N)
-        seqs[s, :N] = latents
-        for j in range(P):
-            i1, i2, i3 = triples[j]
-            seqs[s, N + j] = 0 if (latents[i1] == latents[i2] == latents[i3]) else 1
-    obs = seqs[:, N:]
-    frac_one = float((obs == 1).mean())
-    assert abs(frac_one - 0.75) < 0.005, f"unique-triple naive accuracy drifted: {frac_one:.4f}"
 
 
 # ---------------------------------------------------------------------------

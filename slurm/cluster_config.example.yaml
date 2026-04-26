@@ -1,0 +1,26 @@
+# Cluster configuration for Bouchet Slurm submissions.
+# Copy this file to `cluster_config.local.yaml` (which is .gitignored) and fill in
+# the real values. Slurm scripts read from `cluster_config.local.yaml`.
+#
+# This separation keeps NetID, Slurm account, and absolute paths out of the public
+# GitHub repo (per project rule).
+
+# Yale identity
+netid: "<your_netid>"                              # e.g. "abc123" — used by sbatch --output, --mail-user
+email: "<your_netid>@yale.edu"                     # used by --mail-user
+
+# Slurm
+account: "<pi_labname>"                            # e.g. "pi_jks79" — sbatch --account
+partition_smoke: "devel"                           # short interactive — sbatch --partition for the smoke job
+partition_production: "gpu"                        # default GPU partition; switch to gpu_h200 if available
+gpu_type: "rtx5000ada"                             # used in --gpus=<type>:<count>; "h200" / "rtx5000ada" / "rtxpro6000"
+
+# Storage paths (verify on first SSH with `ls ~/`)
+project_dir: "/home/<netid>/project_pi_<labname>/mdm_research"
+scratch_dir: "/home/<netid>/scratch_pi_<labname>/mdm_research"
+
+# Conda environment name on Bouchet
+conda_env: "mdm"
+
+# Optional notification policy
+mail_type: "BEGIN,END,FAIL"

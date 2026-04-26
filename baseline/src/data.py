@@ -52,12 +52,24 @@ def _nae(values: tuple[int, int, int]) -> int:
 def make_triples(N: int, P: int, seed: int) -> np.ndarray:
     """Sample the P fixed observation triples — pre-fixed once for the distribution.
 
-    Convention (binding for tests): np.random.RandomState(seed).randint(0, N, size=(P, 3)).
-    Each entry is independently drawn from [0, N) with replacement, allowing
-    degenerate triples (i, i, i). Paper Definition 3.1 / §5.1 / §5.4.
+    Convention (binding for tests, switched 2026-04-26 per the user's Phase 7
+    decision): WITHOUT replacement per triple. Each of the P triples is sampled
+    independently as `np.random.RandomState(seed).choice(N, size=3, replace=False)`,
+    so every triple has THREE DISTINCT indices.
+
+    This matches the planted-CSP convention used in Conjecture B.13 (the
+    1-RSB cavity prediction is stated for the random k-uniform hypergraph =
+    distinct-index k-tuples) and makes the paper's "naive guessing leads to
+    75% accuracy" claim hold *exactly* (no degenerate triples lower P(NAE=1)
+    below the asymptotic 0.75).
+
+    See methodology_notes.md Q1 for the resolution rationale.
     """
     rng = np.random.RandomState(seed)
-    return rng.randint(0, N, size=(P, 3))
+    triples = np.empty((P, 3), dtype=np.int64)
+    for j in range(P):
+        triples[j] = rng.choice(N, size=3, replace=False)
+    return triples
 
 
 def sample_latents(N: int, m: int, rng: np.random.RandomState) -> np.ndarray:

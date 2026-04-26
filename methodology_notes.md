@@ -22,20 +22,14 @@ This file collects **methodological ambiguities** in Kim et al. 2025 (arXiv:2502
 - **Implication for our entropy filter.** The "intractability danger zone" predicted by Prop 3.3 sits at a specific masking-fraction interval that depends on the exact triple distribution. If the paper's triples are without-replacement (planted-CSP-style) but our generator does with-replacement (or vice versa), the danger zone moves. Our `top_filter` ablation may target a slightly different α-interval than the paper's theoretical prediction.
 - **Implication for reporting.** Our reproduction of Table 1 is implicitly a stronger claim if we match the paper's triple distribution. If we mismatch, we should either match the paper exactly or document the difference.
 
-**Status.** **Open.** Both interpretations are textually consistent with the paper's prose: "for some randomly chosen (pre-fixed) triples (i₁, i₂, i₃) ∈ [N]" (Section 3.3) does not specify the joint distribution.
+**Status.** **Resolved 2026-04-26 (Phase 7).** We use **without replacement**: each of the P triples has three distinct indices, sampled as `np.random.RandomState(seed).choice(N, size=3, replace=False)` per triple. Rationale (the user's call): the 1-RSB cavity prediction in Conjecture B.13 is stated for the planted random k-uniform hypergraph — i.e., distinct-index k-tuples — so this aligns our experimental data with the theoretical danger zone Prop 3.3 identifies, tightening the paper's narrative. Empirically this also makes the population P(NAE = 1) exactly 1 − 1/m² = 0.75 for m = 2, matching the paper's Table 1 caption with no caveat.
 
-**Resolution path** (in order of expected effort):
+**What changed in code (commit pushed 2026-04-26):**
+- `baseline/src/data.py::make_triples` now uses without-replacement sampling.
+- `tests/test_lo_nae_sat.py` updated with the new seed-42 ground truth: triples now `[(1,4,2), (3,1,2), (1,0,3), (0,1,2), (0,2,3), (4,2,0), (2,0,4), (1,2,4), (0,3,1), (0,1,2)]`; the (N=5, P=10) worked-example sequence with latents `(1, 2, 1, 2, 1)` is now `[1, 2, 1, 2, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1]`.
+- `paper_notes.md` §5 updated; the prior "0.7125 vs 0.75" caveat is removed in favor of the clean 0.75 statement.
 
-1. **Inspect the official codebases.**
-   - `https://github.com/HKUNLP/diffusion-vs-ar` (Ye et al. 2024, the codebase the paper uses for puzzles) — does it ship an L&O-NAE-SAT generator? If yes, read the triple-sampling line.
-   - `https://github.com/ML-GSAI/SMDM` (Nie et al. 2024) — similar check.
-   - **Note:** the L&O-NAE-SAT distribution is *new* in Kim et al. 2025; it may not be in the prior codebases. In that case the authors likely ship their own data-generation code. If so, look for a Kim et al. release.
-2. **Inspect the planted-CSP literature linked in §B.4.** The 1-RSB cavity prediction (Conjecture B.13) is stated for the planted-random-CSP model, which conventionally uses the *random k-uniform hypergraph* construction — i.e., choose each ordered k-tuple `S` of distinct elements with probability `φ / N^{k−1}`. This is **without-replacement** at the per-tuple level. If the paper inherits this convention, with-replacement would be inconsistent with their theoretical analysis.
-3. **Email the authors.** If steps 1–2 are inconclusive, email Kulin Shah (`kulin-shah@utexas.edu`, listed as correspondence on the title page).
-
-**Working assumption** (until resolved): our `baseline/src/data.py` uses **with-replacement** triple sampling, matching the existing notebook convention. This is documented in `paper_notes.md` §5.2 with a caveat. The smoke test asserts both regimes (asymptotic 0.75 with explicitly-distinct triples, finite-N analytical 0.7125 with the seed-42 generator).
-
-**If we discover the paper uses without-replacement:** we will (a) flip the default in `baseline/src/data.py` to without-replacement and (b) re-run all configs. The training-data generator is cheap, so this is a 1-day fix.
+**If we later discover Kim et al. used with-replacement:** we will flip the convention back. The data generator is cheap (~minutes per (N, P) config), so this is a 1-day re-run. Both convention paths are tested in the codebase's git history.
 
 ---
 
@@ -55,7 +49,11 @@ This file collects **methodological ambiguities** in Kim et al. 2025 (arXiv:2502
 
 ---
 
-## Q3. ARM-with-ordering training format for Sudoku
+## Q3. ARM-with-ordering training format for Sudoku — **NOT IN SCOPE FOR v1**
+
+> **Status update 2026-04-26.** Sudoku is deferred from the v1 paper per the user's Phase 7 decision (`sudoku_scope_decision.md`). This question is preserved here for the follow-up paper that will tackle Tables 2 & 5. Resolution is already in `sudoku_scope_decision.md`: Shah et al.'s `kulinshah98/llm-reasoning-logic-puzzles` uses `(row, col, value)` triplets, 243 tokens per solution, with `--config.seq_order=solver-order` to emit cells in solving order.
+
+
 
 **Question.** Paper Appendix D.2 / Table 2 reports "ARM (with ordering)" achieving 87.18 % on Sudoku. The baseline traces back to Shah et al. 2024. **What is the exact training format?** Specifically:
 
@@ -72,7 +70,11 @@ The paper's prose does not specify; the audit (`code_audit.md` P0-3) flagged thi
 
 ---
 
-## Q4. Sudoku 7-strategy filter exactness
+## Q4. Sudoku 7-strategy filter exactness — **NOT IN SCOPE FOR v1**
+
+> **Status update 2026-04-26.** Same as Q3: not relevant to v1. Preserved for the follow-up. Note that `sudoku_scope_decision.md` already established that Shah's data ships with strategy IDs embedded (one per cell, `0=given, 2=Lone single, 3=Hidden single, ...`), so when we do the Sudoku follow-up we will not re-implement the filter — we will use Shah's annotations directly.
+
+
 
 **Question.** Shah et al. 2024 filter the Radcliffe (2020) 3M Kaggle puzzles by 7 fixed strategies (no backtracking) to define the easy/hard split (paper Appendix D.2). **Which exact 7?** And what are their tie-breaking rules?
 
@@ -125,6 +127,25 @@ The paper's prose does not specify; the audit (`code_audit.md` P0-3) flagged thi
 **Status.** **Open.** Affects only the deferred Figure 2 reproduction, not the headline Table 1 / Table 2.
 
 **Resolution path.** If we go after Figure 2, train one 19M proxy at 5×10⁴ iterations and compare its error against a larger proxy (e.g., 42M @ 5×10⁴). If they agree, the choice doesn't matter; if they don't, document the question.
+
+---
+
+## Q8. Absolute entropy thresholds vs. percentile thresholds at production scale — **EMPIRICAL OBSERVATION 2026-04-26**
+
+**Question.** The entropy filter supports two threshold flavors: absolute (`H_low` and `H_high` in nats) and batch-relative percentiles. Which gives a more reproducible filter behavior at production scale?
+
+**Why it matters.** If absolute thresholds shift relative to the model's actual entropy distribution as the model evolves (or across (N, P) configs), the filter behavior is hard to interpret across runs. Percentile thresholds are self-calibrating but discard a fixed *fraction* of each batch regardless of where the entropy distribution sits.
+
+**Status.** **Open / preliminary observation.** The medium smoke (`scripts/medium_smoke.py`, ran 50 steps × 5 variants on a 19M MDM at seq=300, batch=32 on CPU) found that:
+
+- `percentile_band` (mode `[25%, 75%]`) fired reliably: 225 samples dropped over 30 post-warmup steps.
+- `bottom`, `top`, `band` (absolute thresholds `H_low = 0.05`, `H_high = 1.05`) dropped 0 samples.
+
+The reason: at 30 post-warmup steps the 19M model still places near-uniform mass over the 3 non-mask data tokens, so per-position entropy sits in `[~0.95, ~1.10]` nats. My smoke-config absolute thresholds were too wide (`[0.05, 1.05]`) to bracket this distribution. The **production** configs use `H_high = 0.65` (tighter), which would behave differently — but we have not yet measured whether 0.65 is well-positioned for the 19M model's mid-training entropy distribution.
+
+**Implication for v1.** Lead the headline ablation with `percentile_band` (self-calibrating; reliably fires across configs and seeds). Treat the three absolute-threshold variants as secondary — useful only if their thresholds are first calibrated by reading the entropy histogram from a baseline run. The 75-job Bouchet array still runs all 5 variants × 5 (N, P) × 3 seeds, but the paper's main figure should foreground percentile.
+
+**Resolution path.** After the Bouchet smoke job finishes, read the per-step `filter_H_min`, `filter_H_max`, `filter_H_mean` columns from its `metrics.jsonl` and adjust the absolute thresholds (in `_base_25_275.yaml` and the 4 derived (N, P) configs) so that they bracket the empirical entropy distribution at ~10 % drop rate per side. If after this calibration the absolute variants still drop nothing — drop them from the paper or report them as a negative result.
 
 ---
 
