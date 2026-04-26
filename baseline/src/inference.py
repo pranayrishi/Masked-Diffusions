@@ -164,11 +164,18 @@ def run_inference(
         sampled = torch.multinomial(probs, num_samples=1, generator=generator).squeeze(-1)
         x[0, masked_pos] = sampled
 
-    # Sanity assertions: no mask token in output, all clues preserved
-    assert (x[0] != mask_token_id).all(), "inference left mask tokens in the output"
-    if fixed_tokens is not None and fixed_mask is not None:
+    # Sanity assertions:
+    # (1) no mask token at any NON-FIXED position (a fixed clue may happen to have a
+    #     value equal to mask_token_id; that's a user choice, not a bug).
+    # (2) all clue positions are preserved bit-exactly.
+    if fixed_mask is not None:
         clue_positions = fixed_mask.to(device)
+        non_clue = ~clue_positions
+        assert (x[0][non_clue] != mask_token_id).all(), \
+            "inference left mask tokens at non-clue positions"
         assert torch.equal(x[0][clue_positions], fixed_tokens.to(device)[clue_positions]), \
             "inference modified clue positions"
+    else:
+        assert (x[0] != mask_token_id).all(), "inference left mask tokens in the output"
 
     return x[0]

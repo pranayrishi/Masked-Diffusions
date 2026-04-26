@@ -569,7 +569,7 @@ Exact configs depend on the cloned codebases (SMDM for scaling laws, Ye et al. 2
 | **SMDM** (Nie et al. 2024, "Scaling up masked diffusion models on text", arXiv:2410.18514) | `https://github.com/ML-GSAI/SMDM` | Section 3.2 scaling-law experiments; 170M / 1.1B text MDM training. |
 | **Diffusion-vs-AR** (Ye et al. 2024, arXiv:2410.14157) — VERIFIED via arXiv abstract page | `https://github.com/HKUNLP/diffusion-vs-ar` | Section 4.2 puzzles (Sudoku, Zebra) training and inference. **Both prior cites in our docs were wrong** — `HKUNLP/discrete-diffusion` and `HKUNLP/diffusion-of-thoughts` both wrong. |
 | **LLaDA** (Nie et al. 2025, arXiv:2502.09992) | `https://github.com/ML-GSAI/LLaDA` | Section 4.4 LLaDA-8B inference, semi-autoregressive sampling configuration. |
-| **Logic-puzzles** (Shah et al. 2024, arXiv:2409.10502) | `https://github.com/kulinshah98/logic-puzzles` | Sudoku/Zebra dataset filtering, ARM-with-ordering teacher forcing. |
+| **llm-reasoning-logic-puzzles** (Shah et al. 2024, arXiv:2409.10502, NeurIPS 2024) | `https://github.com/kulinshah98/llm-reasoning-logic-puzzles` (verified 2026-04-26) | Sudoku/Zebra datasets WITH strategy IDs and solver-order sequences embedded; ARM-with-ordering teacher forcing implemented in JAX/Flax. **Note:** the URL `kulinshah98/logic-puzzles` cited in earlier drafts is a 404; the correct repo name is `llm-reasoning-logic-puzzles`. |
 
 ---
 

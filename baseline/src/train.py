@@ -25,12 +25,14 @@ from .diffusion import (
 )
 from .model import Transformer, TransformerConfig
 from .utils import (
+    batch_indices_for_step,
     JsonlLogger,
     auto_device,
     capture_rng_states,
     CheckpointState,
     load_checkpoint,
     load_config,
+    restore_rng_states,
     save_checkpoint,
     save_config,
     set_global_seed,
@@ -177,22 +179,17 @@ def run_training(cfg: TrainConfig, *, resume_from: str | None = None) -> None:
         optimizer.load_state_dict(state.optimizer_state)
         if state.scheduler_state is not None:
             scheduler.load_state_dict(state.scheduler_state)
-        # RNG restoration is best-effort; numpy state is required for data sampling determinism
-        try:
-            torch.set_rng_state(state.rng_state_torch)
-            np.random.set_state(state.rng_state_numpy)
-        except Exception as exc:
-            print(f"[train] warning: failed to restore RNG state cleanly: {exc}")
+        restore_rng_states(state)
         start_step = state.step
         print(f"[train] resumed from step {start_step}")
 
     # --- Training loop ---
     train_size = train.shape[0]
-    rng = np.random.default_rng(cfg.seed + 1)   # for index sampling (independent of model RNG)
     t0 = time.monotonic()
 
     for step in range(start_step + 1, cfg.num_iterations + 1):
-        idx = rng.integers(0, train_size, size=cfg.batch_size)
+        # Stateless, step-deterministic batch indices — survives preemption byte-for-byte.
+        idx = batch_indices_for_step(cfg.seed, step, train_size, cfg.batch_size)
         batch = torch.as_tensor(train[idx], dtype=torch.long, device=device)
 
         metrics = train_step(

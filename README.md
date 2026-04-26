@@ -64,16 +64,16 @@ Yale's [Bouchet HPC](https://docs.ycrc.yale.edu/clusters/bouchet/) cluster (Slur
 
 ## Status
 
-Phases 1–5 complete. The clean baseline package and the entropy-filtered modification both pass their smoke gates on CPU. Cluster runs have not yet been scheduled.
+Phases 1–6 complete. **52 unit tests pass**, end-to-end smoke runs in ~10 s on CPU, all 5 filter modes verified to fire correctly, checkpoint/resume verified bit-exact for preemption resilience. Cluster runs have not yet been scheduled.
 
 | Phase | Deliverable | Status |
 |---|---|---|
 | 1 | `phase1_inventory.md` | done |
 | 2 | `paper_notes.md` (source of truth) | done |
 | 3 | `code_audit.md` | done |
-| 4 | `baseline/` package + 23 unit tests + L&O-NAE-SAT smoke (3.7 s on CPU) | done |
-| 5 | `entropy_filtered/` package + 15 filter tests + filtered smoke (2.6 s on CPU) | done |
-| 6 | Awaiting Bouchet review by user | pending |
+| 4 | `baseline/` + 32 unit tests (incl. checkpoint/resume) + L&O-NAE-SAT smoke (3.7 s) | done |
+| 5 | `entropy_filtered/` + 20 filter tests + filtered smoke (2.6 s) | done |
+| 6 | `methodology_notes.md`, `sudoku_scope_decision.md`, all 5 (N, P) × 5 variant configs, extended tests | done |
 | 7 | Slurm scripts → user-approved sbatch | pending |
 | 8 | `findings.md` | pending |
 

@@ -136,15 +136,21 @@ def load_checkpoint(path: str) -> CheckpointState:
 
 
 def capture_rng_states() -> dict[str, Any]:
+    """Capture global RNG states. We use the legacy numpy API (np.random.get_state())
+    so that np.random.set_state(...) at restore time is a single, well-supported call.
+    The data-loader RNG is *not* captured here — it is derived deterministically from
+    (seed, step) via `batch_indices_for_step`, so resume reproducibility does not depend
+    on saving its state."""
     return {
         "rng_state_torch": torch.get_rng_state(),
         "rng_state_cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
-        "rng_state_numpy": np.random.get_state(legacy=False),
+        "rng_state_numpy": np.random.get_state(),
         "rng_state_python": random.getstate(),
     }
 
 
 def restore_rng_states(state: CheckpointState) -> None:
+    """Restore global RNG states captured by `capture_rng_states`."""
     torch.set_rng_state(state.rng_state_torch)
     if state.rng_state_cuda is not None and torch.cuda.is_available():
         torch.cuda.set_rng_state_all(state.rng_state_cuda)
@@ -159,3 +165,23 @@ def restore_rng_states(state: CheckpointState) -> None:
 def auto_device() -> torch.device:
     """Return cuda if available else cpu. Bouchet jobs override via env if needed."""
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+# ---------------------------------------------------------------------------
+# Step-deterministic batch index sampler
+# ---------------------------------------------------------------------------
+
+def batch_indices_for_step(seed: int, step: int, train_size: int, batch_size: int) -> np.ndarray:
+    """Return `batch_size` random training indices, deterministic in (seed, step).
+
+    Stateless. We derive a fresh `numpy.random.default_rng` from the (seed, step) pair
+    every iteration, so a resumed run that picks up at step `k` produces *exactly* the
+    same batch indices as the reference run at step `k`. This is the cleanest way to
+    get bit-exact resume on Bouchet preemption — no Generator state to checkpoint.
+
+    The mixing function below combines seed and step into a single 64-bit RNG seed.
+    """
+    # Mix seed and step into a single non-negative 63-bit integer
+    mixed = ((int(seed) & 0xFFFFFFFF) << 32) | (int(step) & 0xFFFFFFFF)
+    rng = np.random.default_rng(mixed)
+    return rng.integers(0, train_size, size=batch_size)

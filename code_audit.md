@@ -90,7 +90,7 @@ yield torch.tensor(np.array(batch), dtype=torch.long)
 
 **What's wrong.** The yielded sequence is just digits 1-9, in solve order. The model has no way to know **which grid cell** each digit refers to. At inference (even with the order fix above), the model would emit a sequence like `(7, 3, 1, 8, ...)` but cannot tell us "the 7 goes at row 2 col 5".
 
-**Shah et al. 2024 (arXiv:2409.10502, the paper that built this dataset)** do **alternating (position, value)** tokens: the sequence becomes `pos_0, val_0, pos_1, val_1, ...`. With 81 cells, sequence length is up to 162 tokens. The model learns a joint distribution over (position, value).
+**Shah et al. 2024 (arXiv:2409.10502, the paper that built this dataset)** use **(row, col, value) triplets — three tokens per cell**: the sequence becomes `row_0, col_0, val_0, row_1, col_1, val_1, ...`. With 81 cells, the solution part of the sequence is **243 tokens** long (verified 2026-04-26 by reading `kulinshah98/llm-reasoning-logic-puzzles/sudoku-code/train/data.py:199`). My earlier "162-token alternating (position, value)" claim was wrong — the actual upstream format is finer. The model learns a joint distribution over (row, col, value).
 
 **Severity.** P0. Even with the inference fix in P0-2, training data is malformed and the model will not learn what's needed.
 

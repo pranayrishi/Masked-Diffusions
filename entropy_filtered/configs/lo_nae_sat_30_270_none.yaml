@@ -1,0 +1,61 @@
+# Base config inherited by the 5 ablation variants. Production scale.
+# (N, P) = (25, 275) — one of the 5 Table 1 configurations.
+#
+# To run a variant: copy this file, override `entropy_filter.mode` and `output_dir`,
+# tune `H_low` / `H_high` / `pct_low` / `pct_high` per the variant's role.
+#
+# This file is itself a valid config — it runs as `mode: none` (the control).
+
+task: lo_nae_sat
+
+data:
+  N: 30
+  P: 270
+  m: 2
+  pad_to: 512
+  pad_value: 2
+  mask_token_id: 3
+  vocab_size: 4
+  seed: 42
+
+# Model identical to baseline/configs/lo_nae_sat_25_275.yaml: 19M MDM with RoPE.
+model:
+  hidden: 384
+  n_layers: 8
+  n_heads: 6
+  ff: 1536
+  causal: false
+  pos_type: rope
+  dropout: 0.0
+  weight_tie: false
+  vocab_size: 4
+
+# Training
+seed: 0
+num_iterations: 50000
+batch_size: 128
+lr: 1.0e-3
+weight_decay: 0.1
+beta1: 0.9
+beta2: 0.95
+grad_clip: 1.0
+eta_min_ratio: 0.1
+log_every: 100
+ckpt_every: 5000
+
+# Entropy filter — variants override
+entropy_filter:
+  mode: none           # "none" | "bottom" | "top" | "band" | "percentile_band"
+  warmup_steps: 500    # filter is OFF for the first 500 steps (user-confirmed default)
+  reduction: mean
+  H_low: 0.0
+  H_high: 1000000.0
+  pct_low: 0.25
+  pct_high: 0.75
+  use_softmax_excluding_mask_token: true
+  eps: 1.0e-12
+
+train_size: 100000
+train_sample_seed: 123
+
+output_dir: runs/lo_nae_sat_30_270_none

@@ -37,8 +37,10 @@ from baseline.src.data import LoNaeSatConfig, generate_dataset            # noqa
 from baseline.src.diffusion import apply_mask, mdm_loss, sample_mask_counts  # noqa: E402
 from baseline.src.model import Transformer, TransformerConfig             # noqa: E402
 from baseline.src.utils import (                                          # noqa: E402
+    batch_indices_for_step,
     JsonlLogger, auto_device, capture_rng_states, CheckpointState,
-    load_checkpoint, load_config, save_checkpoint, save_config, set_global_seed,
+    load_checkpoint, load_config, restore_rng_states, save_checkpoint,
+    save_config, set_global_seed,
 )
 
 from .filter import EntropyFilterConfig, filter_batch                     # noqa: E402
@@ -255,15 +257,15 @@ def run_filtered_training(cfg: FilteredTrainConfig, *, resume_from: str | None =
         optimizer.load_state_dict(state.optimizer_state)
         if state.scheduler_state is not None:
             scheduler.load_state_dict(state.scheduler_state)
+        restore_rng_states(state)
         start_step = state.step
         print(f"[filtered] resumed from step {start_step}")
 
     train_size = train.shape[0]
-    rng = np.random.default_rng(cfg.seed + 1)
     t0 = time.monotonic()
 
     for step in range(start_step + 1, cfg.num_iterations + 1):
-        idx = rng.integers(0, train_size, size=cfg.batch_size)
+        idx = batch_indices_for_step(cfg.seed, step, train_size, cfg.batch_size)
         batch = torch.as_tensor(train[idx], dtype=torch.long, device=device)
 
         metrics = filtered_train_step(
