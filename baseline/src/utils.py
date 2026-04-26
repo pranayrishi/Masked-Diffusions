@@ -54,10 +54,11 @@ def set_global_seed(seed: int) -> None:
       - CUBLAS_WORKSPACE_CONFIG=':4096:8' (required by deterministic cuBLAS on CUDA;
         harmless on CPU). Set with `setdefault` so an explicit shell-level override wins.
 
-    `warn_only=True` so a stray non-deterministic op surfaces as a UserWarning rather
-    than aborting training. Promote to warn_only=False once the production code path
-    is fully audited; for now, warnings are visible in the Slurm `.err` and act as
-    an early-warning signal.
+    `warn_only=False` (promoted from True after Phase-1 calibration on 2026-04-26
+    audited zero non-determinism warnings across all 5 (N, P) configs × 1500-2000
+    training steps each on H200/PyTorch-2.1.2-foss-2022b-CUDA-12.1.1). Any
+    non-deterministic op now ABORTS rather than warns — the production runs
+    cannot silently lose reproducibility.
     """
     os.environ["PYTHONHASHSEED"] = str(seed)
     os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
@@ -70,7 +71,7 @@ def set_global_seed(seed: int) -> None:
 
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
-    torch.use_deterministic_algorithms(True, warn_only=True)
+    torch.use_deterministic_algorithms(True, warn_only=False)
 
 
 # ---------------------------------------------------------------------------

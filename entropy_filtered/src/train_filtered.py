@@ -36,6 +36,7 @@ sys.path.insert(0, str(REPO))
 
 from baseline.src.data import LoNaeSatConfig, generate_dataset            # noqa: E402
 from baseline.src.diffusion import apply_mask, mdm_loss, per_sample_mdm_loss, sample_mask_counts  # noqa: E402
+from baseline.src.evaluate import evaluate_lo_nae_sat                     # noqa: E402
 from baseline.src.model import Transformer, TransformerConfig             # noqa: E402
 from baseline.src.utils import (                                          # noqa: E402
     batch_indices_for_step,
@@ -44,7 +45,9 @@ from baseline.src.utils import (                                          # noqa
     save_config, set_global_seed,
 )
 
-from .filter import EntropyFilterConfig, filter_batch                     # noqa: E402
+from .filter import (                                                    # noqa: E402
+    EntropyFilterConfig, FilterTraceReader, FilterTraceWriter, filter_batch,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -79,6 +82,13 @@ class FilteredTrainConfig:
     train_sample_seed: int
     # early stopping (calibration runs use this; production runs leave disabled)
     early_stop: dict = field(default_factory=dict)
+    # held-out evaluation at end of training (set num_samples=0 to skip)
+    eval_num_samples: int = 0
+    eval_test_seed: int = 99999             # MUST be distinct from train_sample_seed
+    eval_strategies: list = field(default_factory=lambda: ["vanilla", "top_prob_margin"])
+    eval_num_steps: int = 50                # MDM reverse-process steps (paper §9.3 puzzles)
+    eval_noise: str = "none"                # "none" | "gumbel" | "gaussian"
+    eval_noise_scale: float = 0.0           # paper: 0.5 for puzzles+gumbel, 0.001 for text+gaussian
 
 
 @dataclass
@@ -163,6 +173,12 @@ def _to_filtered_config(d: dict) -> FilteredTrainConfig:
         train_size=int(d.get("train_size", 100_000)),
         train_sample_seed=int(d.get("train_sample_seed", 123)),
         early_stop=d.get("early_stop", {}),
+        eval_num_samples=int(d.get("eval_num_samples", 0)),
+        eval_test_seed=int(d.get("eval_test_seed", 99999)),
+        eval_strategies=list(d.get("eval_strategies", ["vanilla", "top_prob_margin"])),
+        eval_num_steps=int(d.get("eval_num_steps", 50)),
+        eval_noise=str(d.get("eval_noise", "none")),
+        eval_noise_scale=float(d.get("eval_noise_scale", 0.0)),
     )
 
 
@@ -196,6 +212,7 @@ def filtered_train_step(
     grad_clip: float,
     filter_cfg: EntropyFilterConfig,
     step: int,
+    trace_n_kept: int | None = None,
 ) -> dict:
     """One filtered training step. Returns scalar metrics for logging.
 
@@ -204,6 +221,9 @@ def filtered_train_step(
       2. Forward the model UNDER torch.no_grad() to compute per-sample entropy.
       3. Decide which samples to keep (filter_batch).
       4. Forward again WITH grad on only the kept samples; compute MDM loss; step.
+
+    `trace_n_kept` is required when filter_cfg.mode=="random_replay" — it's the keep
+    count from the paired entropy run at this step.
     """
     model.train()
     B, L = x0.shape
@@ -224,7 +244,7 @@ def filtered_train_step(
         scoring_logits = model(x_masked)
     decision = filter_batch(
         scoring_logits, mask, filter_cfg,
-        mask_token_id=mask_token_id, step=step,
+        mask_token_id=mask_token_id, step=step, trace_n_kept=trace_n_kept,
     )
 
     # Mechanism diagnostic: compute per-sample MDM loss on ALL samples under no-grad
@@ -351,6 +371,17 @@ def run_filtered_training(cfg: FilteredTrainConfig, *, resume_from: str | None =
     save_config(cfg.__dict__, f"{cfg.output_dir}/config.yaml")
     logger = JsonlLogger(f"{cfg.output_dir}/metrics.jsonl")
 
+    # Per-step filter trace (always-on, ~50 bytes/row × num_iterations). Cheap I/O,
+    # essential for random_replay paired controls. Read by trace_reader below if
+    # mode=="random_replay".
+    trace_writer = FilterTraceWriter(f"{cfg.output_dir}/filter_trace.jsonl")
+    trace_reader: FilterTraceReader | None = None
+    if fcfg.mode == "random_replay":
+        if not fcfg.paired_trace_path:
+            raise ValueError("random_replay mode requires entropy_filter.paired_trace_path")
+        trace_reader = FilterTraceReader(fcfg.paired_trace_path)
+        print(f"[filtered] random_replay: paired trace covers steps 1..{trace_reader.max_step()}")
+
     start_step = 0
     if resume_from is not None:
         state = load_checkpoint(resume_from)
@@ -375,11 +406,15 @@ def run_filtered_training(cfg: FilteredTrainConfig, *, resume_from: str | None =
         idx = batch_indices_for_step(cfg.seed, step, train_size, cfg.batch_size)
         batch = torch.as_tensor(train[idx], dtype=torch.long, device=device)
 
+        trace_n_kept = trace_reader.n_kept_at(step) if trace_reader is not None else None
         metrics = filtered_train_step(
             model, optimizer, batch,
             mask_token_id=mask_token_id, pad_start=pad_start,
             grad_clip=cfg.grad_clip, filter_cfg=fcfg, step=step,
+            trace_n_kept=trace_n_kept,
         )
+        # Always emit the trace row so any downstream random_replay can mirror this run.
+        trace_writer.log(step=step, n_kept=metrics["filter_n_kept"], n_dropped=metrics["filter_n_dropped"])
         scheduler.step()
 
         if metrics.get("skipped_optim_step", 0) == 0:
@@ -430,6 +465,7 @@ def run_filtered_training(cfg: FilteredTrainConfig, *, resume_from: str | None =
             break
 
     logger.close()
+    trace_writer.close()
 
     # Always emit plateau_step.txt — single integer, no other characters. The value is
     # the step at which training STOPPED, which is either the detected plateau step
@@ -441,6 +477,65 @@ def run_filtered_training(cfg: FilteredTrainConfig, *, resume_from: str | None =
     status = "EARLY-STOPPED at plateau" if early_stopped else "completed full budget"
     print(f"[filtered] done in {elapsed:.1f}s ({final_step} iterations, {status})")
     print(f"[filtered] plateau_step.txt={final_step}")
+
+    # -----------------------------------------------------------------------
+    # Held-out evaluation (vanilla + adaptive). Skipped when eval_num_samples == 0.
+    # -----------------------------------------------------------------------
+    if cfg.task == "lo_nae_sat" and cfg.eval_num_samples > 0:
+        eval_t0 = time.monotonic()
+        if cfg.eval_test_seed == cfg.train_sample_seed:
+            raise ValueError(
+                "eval_test_seed must differ from train_sample_seed to ensure held-out evaluation; "
+                f"both are {cfg.train_sample_seed}"
+            )
+        print(f"[filtered] generating held-out test set: {cfg.eval_num_samples} samples "
+              f"(seed={cfg.eval_test_seed}; differs from train_sample_seed={cfg.train_sample_seed})")
+        test_seqs, _ = generate_dataset(
+            data_cfg_obj, num_samples=cfg.eval_num_samples, sample_seed=cfg.eval_test_seed,
+        )
+
+        eval_results = []
+        for strategy in cfg.eval_strategies:
+            print(f"[filtered] eval strategy={strategy} num_steps={cfg.eval_num_steps} ...")
+            ev_t0 = time.monotonic()
+            res = evaluate_lo_nae_sat(
+                model,
+                test_seqs,
+                data_cfg_obj,
+                strategy=strategy,
+                num_steps=cfg.eval_num_steps,
+                noise=cfg.eval_noise,
+                noise_scale=cfg.eval_noise_scale,
+                num_eval=cfg.eval_num_samples,
+                device=device,
+            )
+            ev_elapsed = time.monotonic() - ev_t0
+            print(f"[filtered] eval {strategy}: accuracy={res.obs_accuracy:.4%} "
+                  f"({res.obs_correct}/{res.obs_total}) in {ev_elapsed:.1f}s")
+            eval_results.append({
+                "strategy": strategy,
+                "num_steps": cfg.eval_num_steps,
+                "noise": cfg.eval_noise,
+                "noise_scale": cfg.eval_noise_scale,
+                "num_samples": res.num_eval_samples,
+                "obs_correct": res.obs_correct,
+                "obs_total": res.obs_total,
+                "obs_accuracy": res.obs_accuracy,
+                "wall_time_s": ev_elapsed,
+            })
+
+        eval_elapsed = time.monotonic() - eval_t0
+        eval_summary = {
+            "final_step": final_step,
+            "early_stopped": early_stopped,
+            "eval_test_seed": cfg.eval_test_seed,
+            "eval_total_wall_time_s": eval_elapsed,
+            "results": eval_results,
+        }
+        import json as _json
+        with open(f"{cfg.output_dir}/eval_results.json", "w") as f:
+            _json.dump(eval_summary, f, indent=2)
+        print(f"[filtered] eval_results.json written; total eval time {eval_elapsed:.1f}s")
 
 
 def _smart_cast(v: str):

@@ -31,7 +31,9 @@ performance roughly the same as baseline at fixed wall-clock.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from pathlib import Path
 
 import torch
 import torch.nn.functional as F
@@ -39,7 +41,7 @@ import torch.nn.functional as F
 
 @dataclass
 class EntropyFilterConfig:
-    mode: str = "none"                  # "none" | "bottom" | "top" | "band" | "percentile_band"
+    mode: str = "none"                  # "none"|"bottom"|"top"|"band"|"percentile_band"|"random_replay"
     warmup_steps: int = 500             # filter disabled for steps 1..warmup_steps
     reduction: str = "mean"             # "mean" or "median" over masked positions per sample
     # Absolute thresholds (used by "bottom", "top", "band")
@@ -48,12 +50,17 @@ class EntropyFilterConfig:
     # Percentile thresholds (used by "percentile_band")
     pct_low: float = 0.25               # drop the lowest pct_low fraction of the batch
     pct_high: float = 0.75              # drop the highest (1 - pct_high) fraction of the batch
+    # Random-replay paired control: path to the entropy run's filter_trace.jsonl.
+    # Required when mode=="random_replay"; ignored otherwise. The replay run drops the
+    # SAME number of samples per step as the entropy run did, but selects them
+    # uniformly at random instead of by entropy.
+    paired_trace_path: str = ""
     # Implementation toggles
     use_softmax_excluding_mask_token: bool = True
     eps: float = 1e-12                  # numerical stability in entropy
 
     def validate(self) -> None:
-        if self.mode not in {"none", "bottom", "top", "band", "percentile_band"}:
+        if self.mode not in {"none", "bottom", "top", "band", "percentile_band", "random_replay"}:
             raise ValueError(f"unknown mode: {self.mode}")
         if self.reduction not in {"mean", "median"}:
             raise ValueError(f"unknown reduction: {self.reduction}")
@@ -63,6 +70,8 @@ class EntropyFilterConfig:
             raise ValueError(f"H_low {self.H_low} > H_high {self.H_high}")
         if not (0.0 <= self.pct_low <= self.pct_high <= 1.0):
             raise ValueError(f"need 0 <= pct_low <= pct_high <= 1, got {self.pct_low}, {self.pct_high}")
+        if self.mode == "random_replay" and not self.paired_trace_path:
+            raise ValueError("mode=random_replay requires paired_trace_path to be set")
 
 
 # ---------------------------------------------------------------------------
@@ -137,11 +146,17 @@ def select_kept_samples(
     cfg: EntropyFilterConfig,
     *,
     step: int,
+    trace_n_kept: int | None = None,    # required when mode=="random_replay"
 ) -> torch.Tensor:
     """Return a (B,) bool mask of which samples to keep for the loss step.
 
     Honors the warmup window: for steps 1..warmup_steps inclusive, ALL samples are kept
     regardless of mode (the filter is "off" until the model has trained for `warmup_steps`).
+
+    For mode=="random_replay", `trace_n_kept` must be provided — the number of samples
+    kept by the paired entropy run at this step. This function then picks `trace_n_kept`
+    samples uniformly at random to keep, mirroring the entropy run's per-step compute
+    budget without using H to decide.
     """
     cfg.validate()
     B = H.shape[0]
@@ -172,7 +187,74 @@ def select_kept_samples(
             keep = torch.ones(B, dtype=torch.bool, device=H.device)
         return keep
 
+    if cfg.mode == "random_replay":
+        if trace_n_kept is None:
+            raise ValueError("random_replay requires trace_n_kept to be supplied")
+        n_keep = max(0, min(int(trace_n_kept), B))
+        if n_keep >= B:
+            return torch.ones(B, dtype=torch.bool, device=H.device)
+        if n_keep == 0:
+            return torch.zeros(B, dtype=torch.bool, device=H.device)
+        perm = torch.randperm(B, device=H.device)
+        keep = torch.zeros(B, dtype=torch.bool, device=H.device)
+        keep[perm[:n_keep]] = True
+        return keep
+
     raise ValueError(f"unhandled mode: {cfg.mode}")
+
+
+# ---------------------------------------------------------------------------
+# Per-step trace I/O — used by random_replay
+# ---------------------------------------------------------------------------
+
+class FilterTraceWriter:
+    """Append-only per-step writer of (step, n_kept, n_dropped) tuples.
+
+    The trace is written for EVERY filtered training run (cheap: ~50 bytes/row × 50K
+    steps = 2.5 MB) so that any downstream random_replay condition can mirror this
+    run's per-step keep counts exactly.
+    """
+
+    def __init__(self, path: str | Path):
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._fh = open(path, "a", buffering=1)
+
+    def log(self, *, step: int, n_kept: int, n_dropped: int) -> None:
+        self._fh.write(json.dumps({"step": int(step), "n_kept": int(n_kept), "n_dropped": int(n_dropped)}) + "\n")
+
+    def close(self) -> None:
+        try:
+            self._fh.close()
+        except Exception:
+            pass
+
+
+class FilterTraceReader:
+    """Random-access reader of a filter_trace.jsonl. Loads the entire file into memory
+    (small) and exposes a step → n_kept lookup. Missing steps raise — the random-replay
+    contract requires per-step coverage."""
+
+    def __init__(self, path: str | Path):
+        self._by_step: dict[int, int] = {}
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                row = json.loads(line)
+                self._by_step[int(row["step"])] = int(row["n_kept"])
+
+    def n_kept_at(self, step: int) -> int:
+        if step not in self._by_step:
+            raise KeyError(f"filter_trace has no row for step {step}")
+        return self._by_step[step]
+
+    def __contains__(self, step: int) -> bool:
+        return step in self._by_step
+
+    def max_step(self) -> int:
+        return max(self._by_step) if self._by_step else 0
 
 
 # ---------------------------------------------------------------------------
@@ -198,8 +280,12 @@ def filter_batch(
     *,
     mask_token_id: int,
     step: int,
+    trace_n_kept: int | None = None,
 ) -> FilterDecision:
-    """End-to-end: score the batch, decide which samples to keep, return diagnostics."""
+    """End-to-end: score the batch, decide which samples to keep, return diagnostics.
+
+    For mode=="random_replay", `trace_n_kept` is the entropy run's keep count at this step.
+    """
     H = per_sample_entropy(
         logits, mask,
         mask_token_id=mask_token_id,
@@ -207,7 +293,7 @@ def filter_batch(
         use_softmax_excluding_mask_token=cfg.use_softmax_excluding_mask_token,
         eps=cfg.eps,
     )
-    keep = select_kept_samples(H, cfg, step=step)
+    keep = select_kept_samples(H, cfg, step=step, trace_n_kept=trace_n_kept)
     return FilterDecision(
         keep=keep,
         H=H,
