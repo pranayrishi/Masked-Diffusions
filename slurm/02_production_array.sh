@@ -6,16 +6,20 @@
 # Each job trains a 19M MDM with one filter mode, one (N, P), one seed for the same
 # WALL-CLOCK budget. Final model + JSONL metrics + ckpts go to project_pi_<labname>.
 #
-# Walltime budget per task: 8 hours. Will be revised down once we have measured
-# steps/sec from the smoke job (`01_smoke.sh`) on the actual partition.
+# Walltime budget per task: SET FROM MEASUREMENT after smoke job 01_smoke.sh
+# reports per-step seconds. Honest walltime ≈ 1.5 × measured wall = better queue
+# priority. Bouchet partitions cap at 24 or 48 h; we'll fit inside whichever
+# applies to ${PARTITION_PRODUCTION}.
 #
-# Total scheduled array = 75 tasks. With 4 GPUs available concurrently on
-# pi_jks79 (assumed; revise after PI confirms partition), wall-clock to finish
-# the array is ~75 × 8h ÷ 4 = 150 hours = ~6 days. With 8 GPUs concurrent: ~75 hours = ~3 days.
+# Concurrency: %${ARRAY_CONCURRENCY} is the maximum the user is permitted on this
+# association; rendered from cluster_config.local.yaml after Phase 0 reads it from
+# `sacctmgr show user $USER --associations`. PI has authorized full usage so we
+# do NOT throttle below the limit.
 #
-# Estimated GPU-hours: 75 tasks × 8 h walltime = 600 GPU-hours UPPER BOUND. The actual
-# is likely 150-300 GPU-hours (each run completes well before walltime). The smoke job
-# will give us the real per-step rate; we'll revise --time= for the production submission.
+# Partition choice: default ${PARTITION_PRODUCTION} (likely gpu_h200). If queue
+# times look long (jobs PD for >1 hour on the smoke), switch to scavenge_gpu — our
+# checkpoint/resume is bit-exact verified (baseline/tests/test_resume.py) so
+# preemption costs are bounded.
 
 #SBATCH --job-name=mdm-prod
 #SBATCH --account=${ACCOUNT}
@@ -23,12 +27,13 @@
 #SBATCH --gpus=${GPU_TYPE}:1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=48G
-#SBATCH --time=08:00:00
-#SBATCH --array=0-74%8                                # 75 tasks; 8 concurrent (revise per PI)
+#SBATCH --time=${PRODUCTION_WALLTIME}                 # set from smoke measurement
+#SBATCH --array=0-74%${ARRAY_CONCURRENCY}             # 75 tasks; cap from sacctmgr
 #SBATCH --output=${PROJECT_DIR}/logs/%x-%A_%a.out
 #SBATCH --error=${PROJECT_DIR}/logs/%x-%A_%a.err
 #SBATCH --mail-type=BEGIN,END,FAIL
 #SBATCH --mail-user=${EMAIL}
+#SBATCH --requeue                                     # auto-requeue on preemption (scavenge_gpu safe)
 
 set -euo pipefail
 module purge
@@ -64,17 +69,32 @@ SEED=${SEEDS[$SEED_IDX]}
 
 CFG_FILE="entropy_filtered/configs/lo_nae_sat_${CONFIG}_${VARIANT}.yaml"
 RUN_NAME="lo_nae_sat_${CONFIG}_${VARIANT}_seed${SEED}"
-OUTPUT="${SCRATCH_DIR}/runs/${RUN_NAME}-${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}"
+# Use a STABLE run dir keyed only on the array job id (NOT the array task id),
+# so a requeued task resumes into the same dir. test_resume.py guarantees
+# bit-exact resume across processes.
+OUTPUT="${SCRATCH_DIR}/runs/${RUN_NAME}-${SLURM_ARRAY_JOB_ID}"
 mkdir -p "${OUTPUT}"
 
 echo "[task ${IDX}] config=${CONFIG} variant=${VARIANT} seed=${SEED}"
 echo "[task ${IDX}] config-file=${CFG_FILE}"
 echo "[task ${IDX}] output=${OUTPUT}"
 
-python -m entropy_filtered.src.train_filtered \
-    --config "${CFG_FILE}" \
-    --override seed=${SEED} \
-    --override output_dir="${OUTPUT}"
+# If a previous (preempted) attempt left a checkpoint, resume from the latest one.
+LATEST_CKPT=$(ls -t "${OUTPUT}"/ckpt_step*.pt 2>/dev/null | head -1 || true)
+if [[ -n "${LATEST_CKPT}" ]]; then
+    echo "[task ${IDX}] resuming from ${LATEST_CKPT}"
+    python -m entropy_filtered.src.train_filtered \
+        --config "${CFG_FILE}" \
+        --override seed=${SEED} \
+        --override output_dir="${OUTPUT}" \
+        --resume "${LATEST_CKPT}"
+else
+    echo "[task ${IDX}] starting fresh"
+    python -m entropy_filtered.src.train_filtered \
+        --config "${CFG_FILE}" \
+        --override seed=${SEED} \
+        --override output_dir="${OUTPUT}"
+fi
 
 # Move final results into the BACKED-UP project area
 PROJECT_RESULTS="${PROJECT_DIR}/results/${RUN_NAME}-${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}"

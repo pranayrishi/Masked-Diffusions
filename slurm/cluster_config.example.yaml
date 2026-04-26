@@ -1,26 +1,39 @@
 # Cluster configuration for Bouchet Slurm submissions.
-# Copy this file to `cluster_config.local.yaml` (which is .gitignored) and fill in
-# the real values. Slurm scripts read from `cluster_config.local.yaml`.
+# Copy this file to `cluster_config.local.yaml` (gitignored) and fill in the
+# real values from Phase 0 outputs.
 #
-# This separation keeps NetID, Slurm account, and absolute paths out of the public
-# GitHub repo (per project rule).
+# Slurm scripts are templates that read these values via slurm/_render_scripts.sh.
+# The rendered scripts go to slurm/_rendered/ which is also gitignored — they
+# contain the verified NetID and absolute paths.
 
-# Yale identity
-netid: "<your_netid>"                              # e.g. "abc123" — used by sbatch --output, --mail-user
-email: "<your_netid>@yale.edu"                     # used by --mail-user
+# Yale identity (verified)
+netid: "prn22"
+email: "prn22@yale.edu"
 
-# Slurm
-account: "<pi_labname>"                            # e.g. "pi_jks79" — sbatch --account
-partition_smoke: "devel"                           # short interactive — sbatch --partition for the smoke job
-partition_production: "gpu"                        # default GPU partition; switch to gpu_h200 if available
-gpu_type: "rtx5000ada"                             # used in --gpus=<type>:<count>; "h200" / "rtx5000ada" / "rtxpro6000"
+# Slurm account — VERIFY in Phase 0 via `slurm_checkup.sh`. If different from
+# pi_jks79, use what slurm_checkup.sh reports.
+account: "pi_jks79"
 
-# Storage paths (verify on first SSH with `ls ~/`)
-project_dir: "/home/<netid>/project_pi_<labname>/mdm_research"
-scratch_dir: "/home/<netid>/scratch_pi_<labname>/mdm_research"
+# Partition selection — set after Phase 0 reads `sinfo` and `qos.sh`.
+# pi_jks79 may exist as a partition (verify); otherwise pick from public partitions.
+partition_smoke: "devel"                           # short interactive — for the smoke job
+partition_production: "gpu_h200"                   # default; switch to scavenge_gpu if queue is long
+
+# GPU type — optimize for QUEUE TIME, not cost. Smaller GPUs typically have
+# shorter queues; right-sizing means faster wall-clock results.
+gpu_type: "h200"                                   # "h200" / "rtx5000ada" / "rtxpro6000"
+
+# Storage paths — verify in Phase 0 via `mydirectories`.
+project_dir: "/home/prn22/project_pi_jks79/mdm_research"
+scratch_dir: "/home/prn22/scratch_pi_jks79/mdm_research"
 
 # Conda environment name on Bouchet
 conda_env: "mdm"
 
-# Optional notification policy
+# Production-array sizing — set in Phase 0 from smoke measurement and
+# `sacctmgr show user $USER --associations`.
+production_walltime: "06:00:00"                    # ≈ 1.5 × measured smoke wall-time
+array_concurrency: 16                              # = max GPUs allowed concurrently per association
+
+# Notification policy
 mail_type: "BEGIN,END,FAIL"

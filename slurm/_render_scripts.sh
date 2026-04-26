@@ -36,6 +36,8 @@ PROJECT_DIR=$(read_yaml project_dir)
 SCRATCH_DIR=$(read_yaml scratch_dir)
 CONDA_ENV=$(read_yaml conda_env)
 EMAIL=$(read_yaml email)
+PRODUCTION_WALLTIME=$(read_yaml production_walltime)
+ARRAY_CONCURRENCY=$(read_yaml array_concurrency)
 
 OUT_DIR="${SCRIPT_DIR}/_rendered"
 mkdir -p "${OUT_DIR}"
@@ -54,6 +56,8 @@ for tpl in "${SCRIPT_DIR}"/*.sh; do
         -e "s|\${SCRATCH_DIR}|${SCRATCH_DIR}|g" \
         -e "s|\${CONDA_ENV}|${CONDA_ENV}|g" \
         -e "s|\${EMAIL}|${EMAIL}|g" \
+        -e "s|\${PRODUCTION_WALLTIME}|${PRODUCTION_WALLTIME}|g" \
+        -e "s|\${ARRAY_CONCURRENCY}|${ARRAY_CONCURRENCY}|g" \
         "$tpl" > "$out"
     chmod +x "$out"
     echo "rendered ${name} -> ${out}"
