@@ -289,39 +289,60 @@ For `m = 2`: `1 − 1/4 = 0.75`. Table 1 caption explicitly says "naive guessing
 
 (Figure 4 / Appendix B.4's BP simulation uses `m = 3`, a *different* setting.)
 
+> **Empirical caveat (added 2026-04-26 from `tests/test_lo_nae_sat.py`).** The paper's 75 % is the **asymptotic** naive accuracy, exact only when all triples have three distinct indices. With **with-replacement** triple sampling (which the paper's prose allows and which the §5.4 worked example confirms — triple j=2 is `(2, 2, 2)`), some triples are degenerate, lowering population P(NAE=1).
+>
+> For each triple `(i, j, k)`, given iid uniform latents from `{1,...,m}`:
+>
+> | Triple kind | P(all equal) | P(NAE = 1) |
+> |---|---|---|
+> | All three indices equal (e.g. `(i, i, i)`) | 1 | 0 |
+> | Exactly two indices equal | 1/m | (m−1)/m |
+> | All three indices distinct | 1/m² | 1 − 1/m² |
+>
+> For `(N, P) = (20, 280)` with seed 42, the population P(NAE = 1) is ≈ **0.7125**, not 0.75. The paper's 75 % is recovered only in the large-N limit (where the all-distinct case dominates) or by sampling triples without replacement. The test suite asserts both the analytical expectation for the seed-42 generator (≈ 0.7125 for N=20) **and** the asymptotic 0.75 for an explicitly all-distinct-triples dataset.
+
 ### 5.3 Padding (Section 3.3 / Appendix C.2.1)
 
 For the (N=20, P=280) experiment: `N + P = 300`. Pad with 212 tokens of value `2` to reach total length 512, which is the max sequence length of the 19M MDM with RoPE.
 
 ### 5.4 Worked example, (N, P) = (5, 10), m = 2
 
-Let triples (chosen with seed 42) be:
+**Generator convention** (binding for `tests/test_lo_nae_sat.py`):
 
-```
-j=0: (3, 4, 0)    j=5: (1, 4, 4)
-j=1: (4, 0, 2)    j=6: (0, 0, 1)
-j=2: (3, 2, 0)    j=7: (4, 1, 1)
-j=3: (4, 4, 4)    j=8: (3, 1, 0)
-j=4: (1, 1, 0)    j=9: (3, 1, 1)
+```python
+rng = np.random.RandomState(42)        # deterministic across numpy versions
+triples = rng.randint(0, N, size=(P, 3))  # each entry in [0, N)
 ```
 
-Suppose we draw latents `(x^0, x^1, x^2, x^3, x^4) = (1, 2, 1, 2, 1)`.
+For `(N, P, seed) = (5, 10, 42)`, this produces the following ten triples (verified empirically 2026-04-26):
+
+```
+j=0: (3, 4, 2)    j=5: (1, 3, 4)
+j=1: (4, 4, 1)    j=6: (0, 3, 1)
+j=2: (2, 2, 2)    j=7: (4, 3, 0)
+j=3: (4, 3, 2)    j=8: (0, 2, 2)
+j=4: (4, 1, 3)    j=9: (1, 3, 3)
+```
+
+(Note: degenerate triples like `(2, 2, 2)` are possible because the paper's construction draws each index independently with replacement.)
+
+Now fix latents `(x^0, x^1, x^2, x^3, x^4) = (1, 2, 1, 2, 1)` (chosen by hand; **not** drawn from the rng — the test injects them directly to make the assertion deterministic of triples alone).
 
 Observations:
-- `j=0` triple `(3,4,0)` → values `(2,1,1)` → NAE = 1
-- `j=1` triple `(4,0,2)` → values `(1,1,1)` → all-equal → NAE = 0
-- `j=2` triple `(3,2,0)` → values `(2,1,1)` → NAE = 1
-- `j=3` triple `(4,4,4)` → values `(1,1,1)` → all-equal → NAE = 0  *(degenerate triple — possible by construction)*
-- `j=4` triple `(1,1,0)` → values `(2,2,1)` → NAE = 1
-- `j=5` triple `(1,4,4)` → values `(2,1,1)` → NAE = 1
-- `j=6` triple `(0,0,1)` → values `(1,1,2)` → NAE = 1
-- `j=7` triple `(4,1,1)` → values `(1,2,2)` → NAE = 1
-- `j=8` triple `(3,1,0)` → values `(2,2,1)` → NAE = 1
-- `j=9` triple `(3,1,1)` → values `(2,2,2)` → all-equal → NAE = 0
+- `j=0` triple `(3,4,2)` → values `(2,1,1)` → NAE = 1
+- `j=1` triple `(4,4,1)` → values `(1,1,2)` → NAE = 1
+- `j=2` triple `(2,2,2)` → values `(1,1,1)` → all-equal → NAE = 0  *(degenerate triple)*
+- `j=3` triple `(4,3,2)` → values `(1,2,1)` → NAE = 1
+- `j=4` triple `(4,1,3)` → values `(1,2,2)` → NAE = 1
+- `j=5` triple `(1,3,4)` → values `(2,2,1)` → NAE = 1
+- `j=6` triple `(0,3,1)` → values `(1,2,2)` → NAE = 1
+- `j=7` triple `(4,3,0)` → values `(1,2,1)` → NAE = 1
+- `j=8` triple `(0,2,2)` → values `(1,1,1)` → all-equal → NAE = 0
+- `j=9` triple `(1,3,3)` → values `(2,2,2)` → all-equal → NAE = 0
 
-Full sequence: `[1, 2, 1, 2, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1, 0]` (length L = 15).
+Full sequence (no padding): `[1, 2, 1, 2, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 0]` (length L = N + P = 15).
 
-Use this as the unit-test ground truth in `tests/test_lo_nae_sat.py`.
+This is the ground truth for `tests/test_lo_nae_sat.py`.
 
 ---
 

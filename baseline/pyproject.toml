@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mdm-baseline"
+version = "0.1.0"
+description = "Clean reproduction baseline for Kim et al. 2025 (arXiv:2502.06768) — Tables 1 & 2"
+readme = "README.md"
+requires-python = ">=3.10"
+
+dependencies = [
+    "torch==2.1.2",
+    "numpy>=1.26,<2",
+    "pyyaml>=6.0",
+    "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.4",
+]
+sudoku = [
+    "pandas>=2.1",
+    "kaggle>=1.5",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q -ra --strict-markers"
+markers = [
+    "slow: tests that take more than a few seconds",
+    "gpu: tests that require a GPU",
+]

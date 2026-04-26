@@ -1,0 +1,46 @@
+# Smoke-test config: tiny model, tiny data. Must finish on CPU in < 10 minutes.
+# This is the gate before Phase 5.
+
+task: lo_nae_sat
+
+# Tiny instance: (N, P) = (5, 10), L_data = 15, padded to 16
+data:
+  N: 5
+  P: 10
+  m: 2
+  pad_to: 16          # multiple of head_dim base; minimal padding overhead
+  pad_value: 2
+  mask_token_id: 3
+  vocab_size: 4
+  seed: 42
+
+# Tiny model: ~10K params (matches paper-notes §8.1 "smoke-test sized")
+model:
+  hidden: 32
+  n_layers: 2
+  n_heads: 2
+  ff: 64
+  causal: false       # MDM = bidirectional
+  pos_type: rope      # paper Appendix C.2.1 uses RoPE for L&O-NAE-SAT
+  dropout: 0.0
+  weight_tie: false
+  vocab_size: 4
+
+# Training (very short)
+seed: 0
+num_iterations: 100
+batch_size: 64
+lr: 1.0e-3
+weight_decay: 0.1
+beta1: 0.9
+beta2: 0.95
+grad_clip: 1.0
+eta_min_ratio: 0.1
+log_every: 20
+ckpt_every: 100
+
+# Data sampling
+train_size: 1000
+train_sample_seed: 123
+
+output_dir: runs/smoke

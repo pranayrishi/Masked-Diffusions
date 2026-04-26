@@ -1,0 +1,44 @@
+# Table 1 row 1: (N, P) = (25, 275). Paper-reported vanilla 78.06%, adaptive 93.76%.
+# Used as a Phase 4 production config; runs on Bouchet GPU.
+task: lo_nae_sat
+
+data:
+  N: 25
+  P: 275
+  m: 2
+  pad_to: 512
+  pad_value: 2
+  mask_token_id: 3
+  vocab_size: 4
+  seed: 42
+
+# 19M MDM with RoPE per paper Appendix C.2.1 + D.1.1
+# (hidden 384, 8 layers, 6 heads, ff 1536 — paper-notes §8.1)
+model:
+  hidden: 384
+  n_layers: 8
+  n_heads: 6
+  ff: 1536
+  causal: false
+  pos_type: rope
+  dropout: 0.0
+  weight_tie: false
+  vocab_size: 4
+
+# Training (paper Appendix D.2 puzzle settings)
+seed: 0
+num_iterations: 50000   # paper §C.2.1: proxy MDM uses 5e4 iterations to converge
+batch_size: 128
+lr: 1.0e-3
+weight_decay: 0.1
+beta1: 0.9
+beta2: 0.95
+grad_clip: 1.0
+eta_min_ratio: 0.1
+log_every: 100
+ckpt_every: 5000
+
+train_size: 100000
+train_sample_seed: 123
+
+output_dir: runs/lo_nae_sat_25_275
