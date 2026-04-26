@@ -54,11 +54,14 @@ def set_global_seed(seed: int) -> None:
       - CUBLAS_WORKSPACE_CONFIG=':4096:8' (required by deterministic cuBLAS on CUDA;
         harmless on CPU). Set with `setdefault` so an explicit shell-level override wins.
 
-    `warn_only=False` (promoted from True after Phase-1 calibration on 2026-04-26
-    audited zero non-determinism warnings across all 5 (N, P) configs × 1500-2000
-    training steps each on H200/PyTorch-2.1.2-foss-2022b-CUDA-12.1.1). Any
-    non-deterministic op now ABORTS rather than warns — the production runs
-    cannot silently lose reproducibility.
+    `warn_only=True` (reverted from False on 2026-04-26 after the Phase B
+    "10K-undertrained" fix decision, q.v. bug_log.md). The Phase 1 calibration
+    audit was H200-only; production now uses scavenge_gpu with mixed GPU types
+    (V100/A100/RTX5000Ada), where not every cuBLAS op is guaranteed
+    deterministic. warn_only=True surfaces non-deterministic ops to warnings.log
+    rather than aborting — bit-exact reproducibility may be lost on those ops,
+    but the run completes. Promote to warn_only=False once each partition is
+    individually audited.
     """
     os.environ["PYTHONHASHSEED"] = str(seed)
     os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
@@ -71,7 +74,7 @@ def set_global_seed(seed: int) -> None:
 
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
-    torch.use_deterministic_algorithms(True, warn_only=False)
+    torch.use_deterministic_algorithms(True, warn_only=True)
 
 
 # ---------------------------------------------------------------------------

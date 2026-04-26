@@ -23,11 +23,11 @@
 
 #SBATCH --job-name=mdm-phaseE
 #SBATCH --account=${ACCOUNT}
-#SBATCH --partition=${PARTITION_PRODUCTION}
-#SBATCH --gpus=${GPU_TYPE}:1
+#SBATCH --partition=scavenge_gpu
+#SBATCH --gpus=1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=8G
-#SBATCH --time=03:00:00
+#SBATCH --time=06:00:00
 #SBATCH --array=0-39%24
 #SBATCH --output=${PROJECT_DIR}/logs/%x-%A_%a.out
 #SBATCH --error=${PROJECT_DIR}/logs/%x-%A_%a.err
@@ -145,7 +145,7 @@ fi
 python -m entropy_filtered.src.train_filtered \
     --config "${CFG_FILE}" \
     --override seed=${SEED} \
-    --override num_iterations=10000 \
+    --override num_iterations=50000 \
     --override output_dir="${SCRATCH_OUTPUT}" \
     --override entropy_filter.mode=${MODE} \
     --override entropy_filter.H_high=${HHIGH} \
@@ -153,6 +153,12 @@ python -m entropy_filtered.src.train_filtered \
     --override eval_num_samples=5000 \
     --override eval_test_seed=99999 \
     --override eval_num_steps=50 \
+    --override early_stop.enabled=true \
+    --override early_stop.criterion=rolling_mean_relative \
+    --override early_stop.tolerance=0.005 \
+    --override early_stop.window=2000 \
+    --override early_stop.check_every=1000 \
+    --override early_stop.min_step=10000 \
     ${EXTRA_OVERRIDES} ${RESUME_ARG}
 
 rsync -av "${SCRATCH_OUTPUT}/" "${PROJECT_RESULTS}/"

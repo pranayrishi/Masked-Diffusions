@@ -574,7 +574,7 @@ def main() -> int:
         k, v = kv.split("=", 1)
         if "." in k:
             head, tail = k.split(".", 1)
-            cfg_dict[head][tail] = _smart_cast(v)
+            cfg_dict.setdefault(head, {})[tail] = _smart_cast(v)
         else:
             cfg_dict[k] = _smart_cast(v)
 
