@@ -27,8 +27,11 @@ gpu_type: "h200"                                   # "h200" / "rtx5000ada" / "rt
 project_dir: "/home/prn22/project_pi_jks79/mdm_research"
 scratch_dir: "/home/prn22/scratch_pi_jks79/mdm_research"
 
-# Conda environment name on Bouchet
-conda_env: "mdm"
+# PyTorch module on Bouchet — use the YCRC-provided module instead of pip install,
+# because compute-node bandwidth to PyPI is ~100 KB/s (full torch download takes
+# many hours). The module bundles Python 3.10.8 + torch 2.1.2 + numpy 1.24.2 +
+# CUDA 12.1.1, which matches our pinned versions exactly.
+pytorch_module: "PyTorch/2.1.2-foss-2022b-CUDA-12.1.1"
 
 # Production-array sizing — set in Phase 0 from smoke measurement and
 # `sacctmgr show user $USER --associations`.

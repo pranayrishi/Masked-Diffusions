@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
 #
-# 00_setup.sh — one-time Conda env setup on Bouchet.
+# 00_setup.sh — environment setup on Bouchet using the YCRC PyTorch module.
 #
-# Runs as a devel-partition batch job (NOT on the login node) to avoid
-# congesting shared login resources. Creates `mdm` env, installs project
-# dependencies, prints torch version on completion.
+# Strategy: instead of `conda env + pip install torch==2.1.2` (which would download
+# ~2 GB at compute-node bandwidth = 30+ min), we load the YCRC-provided
+# PyTorch/2.1.2-foss-2022b-CUDA-12.1.1 module — same exact torch version, already
+# compiled, instantly available. We then `pip install --user` the three small
+# Python-only deps we still need (pyyaml, tqdm, pytest), which is a few hundred KB.
 #
-# Re-runnable: `conda create` will fail fast if the env exists; we tolerate
-# that and proceed to (re)install project dependencies.
+# Verified 2026-04-26 that numpy 1.24.2 (bundled with the YCRC module) reproduces
+# our seed-42 test ground truth identically to numpy 1.26.3 on the laptop.
+#
+# Re-runnable: pip install --user is idempotent.
 #
 # Renders from this template via slurm/_render_scripts.sh.
 
@@ -21,34 +25,38 @@
 #SBATCH --error=${PROJECT_DIR}/setup_%j.err
 
 set -euo pipefail
-module reset
-module load miniconda
-source $(conda info --base)/etc/profile.d/conda.sh
+module purge
+module load ${PYTORCH_MODULE}
 
-# Idempotent env creation
-if conda env list | awk '{print $1}' | grep -q "^${CONDA_ENV}$"; then
-    echo "[setup] conda env '${CONDA_ENV}' already exists, reusing"
-else
-    echo "[setup] creating conda env '${CONDA_ENV}' (python=3.10)"
-    conda create -n ${CONDA_ENV} python=3.10 -y
-fi
-conda activate ${CONDA_ENV}
+cd ${PROJECT_DIR}
 
-# Install project + test extras (pinned in baseline/pyproject.toml)
-cd ${PROJECT_DIR}/baseline
-pip install --upgrade pip
-pip install -e ".[test]"
-
-# Sanity import
+# Verify the module gives us what we need
 python - <<'PYEOF'
-import torch
-print(f"mdm env OK  torch={torch.__version__}  cuda={torch.cuda.is_available()}")
+import sys, torch, numpy
+print(f"python   = {sys.version.split()[0]}")
+print(f"torch    = {torch.__version__}  cuda_compiled={torch.version.cuda}")
+print(f"numpy    = {numpy.__version__}")
 PYEOF
 
-# Run the unit-test suites once on this allocation to make sure the env
-# matches the codebase. baseline tests must pass before we trust GPU jobs.
-cd ${PROJECT_DIR}
-( cd baseline && python -m pytest tests/ -q )
-( cd entropy_filtered && python -m pytest tests/ -q )
+# Verified what's already in the YCRC PyTorch module (sys.path entries):
+#   torch 2.1.2, numpy 1.24.2 (via SciPy-bundle), pyyaml 6.0, pytest 7.2.0,
+#   networkx, sympy, expecttest, Pillow, protobuf, ...
+# Only `tqdm` is missing — installing into the per-user site, which is shared
+# across all allocations and does not need to be reinstalled.
+#
+# CRITICAL: do NOT set PYTHONPATH explicitly — the YCRC module manages sys.path
+# dynamically. Setting PYTHONPATH from scratch clobbers the module's torch /
+# numpy / pyyaml entries (verified 2026-04-26 in setup_9530796.out). Instead,
+# we rely on `cd $SLURM_SUBMIT_DIR` putting the project root on sys.path[0]
+# via Python's -m flag and on the conftest.py self-location for tests.
+echo "==> installing tqdm (only missing dep) into user site"
+pip install --user tqdm 2>&1 | tail -5
+
+# Run the test suites on this CPU-only allocation. Both packages must pass.
+echo "==> baseline tests"
+( cd baseline && python -m pytest tests/ -v )
+
+echo "==> entropy_filtered tests"
+( cd entropy_filtered && python -m pytest tests/ -v )
 
 echo "Environment setup complete"

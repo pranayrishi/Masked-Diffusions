@@ -34,7 +34,7 @@ PARTITION_PRODUCTION=$(read_yaml partition_production)
 GPU_TYPE=$(read_yaml gpu_type)
 PROJECT_DIR=$(read_yaml project_dir)
 SCRATCH_DIR=$(read_yaml scratch_dir)
-CONDA_ENV=$(read_yaml conda_env)
+PYTORCH_MODULE=$(read_yaml pytorch_module)
 EMAIL=$(read_yaml email)
 PRODUCTION_WALLTIME=$(read_yaml production_walltime)
 ARRAY_CONCURRENCY=$(read_yaml array_concurrency)
@@ -54,7 +54,7 @@ for tpl in "${SCRIPT_DIR}"/*.sh; do
         -e "s|\${GPU_TYPE}|${GPU_TYPE}|g" \
         -e "s|\${PROJECT_DIR}|${PROJECT_DIR}|g" \
         -e "s|\${SCRATCH_DIR}|${SCRATCH_DIR}|g" \
-        -e "s|\${CONDA_ENV}|${CONDA_ENV}|g" \
+        -e "s|\${PYTORCH_MODULE}|${PYTORCH_MODULE}|g" \
         -e "s|\${EMAIL}|${EMAIL}|g" \
         -e "s|\${PRODUCTION_WALLTIME}|${PRODUCTION_WALLTIME}|g" \
         -e "s|\${ARRAY_CONCURRENCY}|${ARRAY_CONCURRENCY}|g" \

@@ -37,14 +37,13 @@
 
 set -euo pipefail
 module purge
-module load miniconda
-source $(conda info --base)/etc/profile.d/conda.sh
-conda activate ${CONDA_ENV}
+module load ${PYTORCH_MODULE}
 
 cd $SLURM_SUBMIT_DIR
 
 export WANDB_MODE=offline
 export PYTHONUNBUFFERED=1
+# DO NOT set PYTHONPATH — would clobber the YCRC PyTorch module's site-packages.
 export OMP_NUM_THREADS=4
 export MKL_NUM_THREADS=4
 

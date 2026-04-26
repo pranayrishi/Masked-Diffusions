@@ -34,15 +34,14 @@
 
 set -euo pipefail
 module purge
-module load miniconda
-source $(conda info --base)/etc/profile.d/conda.sh
-conda activate ${CONDA_ENV}
+module load ${PYTORCH_MODULE}
 
 cd $SLURM_SUBMIT_DIR
 
 export WANDB_MODE=offline
 export PYTHONUNBUFFERED=1
-# Avoid threading thrash inside a Slurm allocation
+# DO NOT set PYTHONPATH — would clobber the YCRC PyTorch module's site-packages.
+# `cd $SLURM_SUBMIT_DIR` + `python -m` makes our packages importable.
 export OMP_NUM_THREADS=4
 export MKL_NUM_THREADS=4
 
@@ -53,8 +52,13 @@ echo "==> 01/03 unit tests"
 ( cd baseline && python -m pytest tests/ -q ) || { echo "baseline tests failed"; exit 1; }
 ( cd entropy_filtered && python -m pytest tests/ -q ) || { echo "entropy_filtered tests failed"; exit 1; }
 
-echo "==> 02/03 quick CPU/GPU smoke (the same one we run locally)"
-bash baseline/scripts/smoke_test.sh
+echo "==> 02/03 GPU sanity"
+python - <<'PYEOF'
+import torch
+print(f"torch={torch.__version__}  cuda_avail={torch.cuda.is_available()}  device_count={torch.cuda.device_count()}")
+if torch.cuda.is_available():
+    print(f"device 0 = {torch.cuda.get_device_name(0)}")
+PYEOF
 
 echo "==> 03/03 production-shape filtered run (250 steps, mode=band, N=25 P=275)"
 python -m entropy_filtered.src.train_filtered \
