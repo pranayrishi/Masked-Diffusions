@@ -1,0 +1,59 @@
+# Local env / IDE
+.DS_Store
+.vscode/
+.idea/
+*.swp
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.ipynb_checkpoints/
+.python-version
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Datasets and large artifacts (regenerated, not source)
+data/
+*.npy
+*.npz
+*.parquet
+*.csv
+!tests/**/*.csv
+
+# Model checkpoints and training outputs
+checkpoints/
+runs/
+wandb/
+outputs/
+logs/
+*.pt
+*.pth
+*.bin
+*.safetensors
+metrics.jsonl
+metrics.csv
+
+# Cluster / credentials (must never be committed)
+cluster_config.yaml
+cluster_config.local.yaml
+.env
+.env.local
+kaggle.json
+*.kaggle.json
+slurm-*.out
+slurm-*.err
+
+# Cloned reference codebases (large, fetched separately)
+codebases/
+
+# Other research projects co-located in the same workspace are git-ignored
+# from this repo's perspective — only files in this directory belong here.
