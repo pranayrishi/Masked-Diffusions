@@ -56,6 +56,9 @@ kaggle.json
 *.kaggle.json
 slurm-*.out
 slurm-*.err
+# Slurm batch logs (named by SBATCH --output=) likewise contain absolute paths
+setup_*.out
+setup_*.err
 
 # Local smoke run outputs
 medium_smoke_runs/
