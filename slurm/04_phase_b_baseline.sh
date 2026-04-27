@@ -75,12 +75,6 @@ python -m entropy_filtered.src.train_filtered \
     --override eval_num_samples=5000 \
     --override eval_test_seed=99999 \
     --override eval_num_steps=50 \
-    --override early_stop.enabled=true \
-    --override early_stop.criterion=rolling_mean_relative \
-    --override early_stop.tolerance=0.005 \
-    --override early_stop.window=2000 \
-    --override early_stop.check_every=1000 \
-    --override early_stop.min_step=10000 \
     ${RESUME_ARG}
 
 # Sync to backed-up project area.
