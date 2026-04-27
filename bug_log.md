@@ -84,3 +84,46 @@ plateaus that are actually still descending. The 500-step window in Phase 1
 calibration was too strict; the 2000-step window the user specified is more
 robust. Cross-check: the loss trajectory itself, not just the plateau detector,
 should be inspected before committing to an iteration budget.
+
+---
+
+## 2026-04-26 — Adaptive inference missing Gumbel(0, 0.5) noise
+
+**Symptom.** Phase B 50K results on (N=25, P=275): vanilla 60-64%, adaptive
+(top_prob_margin) 63-66%. Paper Table 1 reports vanilla 78.06% / adaptive 93.76%.
+The adaptive-vs-vanilla delta we measured (~5pp) is far below the paper's
+~16pp delta. Possible cause: paper's adaptive inference adds Gumbel noise to
+the oracle scores; our implementation defaulted to noise=none.
+
+**Root cause.** paper_notes.md line 504 documents the Table 1 inference setup
+as "50 reverse steps per sample, **Gumbel coeff 0.5**". Paper §3.4 specifies
+Gumbel(0, 1) × 0.5 added to selection scores (NOT to logits used for sampling
+the unmasked token). The `_add_score_noise` helper in `baseline/src/inference.py`
+already implements this; we just had the noise parameters defaulting off.
+
+**Fix.** Changed defaults in:
+- `entropy_filtered/src/train_filtered.py` `FilteredTrainConfig`:
+  `eval_noise="gumbel"`, `eval_noise_scale=0.5`.
+- `baseline/src/run_eval_only.py` CLI defaults: same.
+
+Vanilla inference is unaffected (`run_inference` ignores noise for
+`strategy="vanilla"`).
+
+**Re-runs triggered.**
+
+- Phase B 9561941 tasks 7-24 (queued at the time of this commit): pick up the
+  fix automatically when they start; they will eval with Gumbel noise.
+- Phase C 9587034 (all 150 queued): same.
+- Phase D, E, F: not yet submitted, will use the new defaults.
+
+The 5 already-finished (25, 275) Phase B runs (9556517 tasks 0-4) plus tasks
+5/6 of 9561941 already in eval do NOT have Gumbel-adaptive numbers. They need
+a re-eval pass via `baseline/src/run_eval_only.py` once the rest of Phase B
+completes; queueing that as a Phase F-like cleanup pass.
+
+**Open question.** The vanilla-accuracy gap (60-64% measured vs 78.06% paper)
+is independent of Gumbel noise (vanilla doesn't use noise). Cause TBD; possible
+candidates from the user's prompt: data generator differences (we use
+without-replacement triples; paper convention may differ), training-data size,
+exact 19M-vs-14M architecture detail, mask-token handling under attention
+mask. Investigating further while the experiment runs.

@@ -72,8 +72,8 @@ def main() -> int:
     ap.add_argument("--num-samples", type=int, default=10000)
     ap.add_argument("--strategies", default="vanilla,top_prob_margin")
     ap.add_argument("--num-steps", type=int, default=50)
-    ap.add_argument("--noise", default="none")
-    ap.add_argument("--noise-scale", type=float, default=0.0)
+    ap.add_argument("--noise", default="gumbel")     # paper Table 1 uses Gumbel
+    ap.add_argument("--noise-scale", type=float, default=0.5)
     ap.add_argument("--eval-test-seed", type=int, default=99999)
     ap.add_argument("--output-name", default="eval_results.json")
     args = ap.parse_args()

@@ -87,8 +87,8 @@ class FilteredTrainConfig:
     eval_test_seed: int = 99999             # MUST be distinct from train_sample_seed
     eval_strategies: list = field(default_factory=lambda: ["vanilla", "top_prob_margin"])
     eval_num_steps: int = 50                # MDM reverse-process steps (paper §9.3 puzzles)
-    eval_noise: str = "none"                # "none" | "gumbel" | "gaussian"
-    eval_noise_scale: float = 0.0           # paper: 0.5 for puzzles+gumbel, 0.001 for text+gaussian
+    eval_noise: str = "gumbel"              # paper §3.4 + line 504 of paper_notes: "Gumbel coeff 0.5"
+    eval_noise_scale: float = 0.5           # paper §3.4: Gumbel(0,1) × 0.5 on adaptive scores
 
 
 @dataclass
