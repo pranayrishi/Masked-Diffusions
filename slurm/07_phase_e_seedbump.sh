@@ -153,6 +153,8 @@ python -m entropy_filtered.src.train_filtered \
     --override eval_num_samples=5000 \
     --override eval_test_seed=99999 \
     --override eval_num_steps=50 \
+    --override eval_noise=gumbel \
+    --override eval_noise_scale=0.5 \
     ${EXTRA_OVERRIDES} ${RESUME_ARG}
 
 rsync -av "${SCRATCH_OUTPUT}/" "${PROJECT_RESULTS}/"

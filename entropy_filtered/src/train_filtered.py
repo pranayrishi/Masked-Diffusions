@@ -177,8 +177,9 @@ def _to_filtered_config(d: dict) -> FilteredTrainConfig:
         eval_test_seed=int(d.get("eval_test_seed", 99999)),
         eval_strategies=list(d.get("eval_strategies", ["vanilla", "top_prob_margin"])),
         eval_num_steps=int(d.get("eval_num_steps", 50)),
-        eval_noise=str(d.get("eval_noise", "none")),
-        eval_noise_scale=float(d.get("eval_noise_scale", 0.0)),
+        # Defaults match paper Table 1 protocol: Gumbel(0, 1) × 0.5 on adaptive scores.
+        eval_noise=str(d.get("eval_noise", "gumbel")),
+        eval_noise_scale=float(d.get("eval_noise_scale", 0.5)),
     )
 
 
