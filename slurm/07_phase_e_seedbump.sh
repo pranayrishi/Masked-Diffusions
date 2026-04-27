@@ -23,7 +23,7 @@
 
 #SBATCH --job-name=mdm-phaseE
 #SBATCH --account=${ACCOUNT}
-#SBATCH --partition=scavenge_gpu
+#SBATCH --partition=scavenge_gpu,gpu_h200
 #SBATCH --gpus=1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=8G
