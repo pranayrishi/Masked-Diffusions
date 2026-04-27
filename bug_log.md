@@ -127,3 +127,36 @@ candidates from the user's prompt: data generator differences (we use
 without-replacement triples; paper convention may differ), training-data size,
 exact 19M-vs-14M architecture detail, mask-token handling under attention
 mask. Investigating further while the experiment runs.
+
+**Update 2026-04-27.** Gumbel(0, 0.5) DID NOT close the gap — it actually
+*hurt* adaptive accuracy. Phase B tasks 13-16 (40_260 s3,s4 + 50_250 s0,s1)
+ran 50K iterations with the Gumbel-equipped eval. Results across the 4 cells:
+
+```
+40_260 s3:  vanilla 62.32%  adaptive(gumbel) 62.44%  Δ +0.12pp
+40_260 s4:  vanilla 62.78%  adaptive(gumbel) 62.81%  Δ +0.03pp
+50_250 s0:  vanilla 62.73%  adaptive(gumbel) 62.70%  Δ -0.03pp
+50_250 s1:  vanilla 62.60%  adaptive(gumbel) 62.50%  Δ -0.10pp
+```
+
+vs. earlier no-Gumbel tasks 5-12:
+
+```
+30_270 s0:  vanilla 62.87%  adaptive(none) 64.60%  Δ +1.73pp
+... (similar +1-3pp pattern across all no-Gumbel cells)
+```
+
+Hypothesis: our trained model's top-1-vs-top-2 margins are small enough
+that Gumbel(0, 0.5) noise (stdev 0.5 nats) dominates and randomizes the
+selection. Paper's adaptive >> vanilla likely requires a more confident
+model — our 14M MDM at 50K iterations is undertrained relative to paper's
+19M MDM.
+
+Implication: our reproduction is fundamentally limited by capacity/training
+budget. The MODIFICATION analysis (entropy filter vs unfiltered baseline)
+will still be done relative to OUR baseline numbers, not paper's. Cross-
+config comparison within the experiment is still meaningful.
+
+The 16pp vanilla gap remains unexplained. Under-investigation candidates:
+architecture differences, training-data-size differences, with- vs without-
+replacement triple convention.
